@@ -1,6 +1,9 @@
-use std::ops::Index;
+use std::ops::{Add, Index, Sub};
 
-use crate::tensor::{Element, Tensor};
+use crate::tensor::{Device, Element, Tensor};
+
+mod cpu_ops;
+mod cuda_ops;
 
 impl<T, I> Index<I> for Tensor<T>
 where
@@ -12,23 +15,18 @@ where
     fn index(&self, index: I) -> &Self::Output {
         let index = index.as_ref();
 
-        if index.len() != self.shape.len() {
-            panic!("Shape of index does not match tensor shape.");
-        }
-
-        if self.shape.iter().zip(index.iter()).any(|(dim, i)| i >= dim) {
-            panic!("Index out of bounds.")
-        }
-
-        println!(
-            "{:?}",
-            self.strides
-                .iter()
-                .zip(index.iter())
-                .collect::<Vec<(&usize, &usize)>>()
+        assert_eq!(
+            index.len(),
+            self.shape().len(),
+            "Shape of index does not match tensor shape."
         );
+        assert!(
+            !self.shape.iter().zip(index.iter()).any(|(dim, i)| i >= dim),
+            "Index out of bounds."
+        );
+
         &self.data[self
-            .strides
+            .stride
             .iter()
             .zip(index.iter())
             .map(|(stride, index)| stride * index)
@@ -36,12 +34,81 @@ where
     }
 }
 
+// impl<T> Add<&Tensor<T>> for &Tensor<T>
+// where
+//     T: Element,
+// {
+//     type Output = Tensor<T>;
+//
+//     fn add(self, rhs: Self) -> Self::Output {
+//         if self.device != rhs.device {
+//             panic!("Tensors must be on the same device")
+//         }
+//         todo!()
+//     }
+// }
+
+macro_rules! elementwise_op_impl {
+    ($Trait:ident, $method:ident; $TraitAssign:ident,$method_assign:ident; $cpu_fn:ident, $cuda_fn:ident) => {
+        impl<T> $Trait<&Tensor<T>> for &Tensor<T>
+        where
+            T: Element,
+        {
+            type Output = Tensor<T>;
+            fn $method(self, rhs: &Tensor<T>) -> Self::Output {
+                assert_eq!(self.shape(), rhs.shape(), "Dimension mismatch");
+                assert_eq!(
+                    self.device(),
+                    rhs.device(),
+                    "Tensors must be on the same device"
+                );
+
+                match self.device() {
+                    Device::CPU => self.$cpu_fn(&rhs, T::$method),
+                    Device::Cuda => self.$cuda_fn(&rhs, T::$method),
+                }
+            }
+        }
+
+        impl<T> $Trait<Tensor<T>> for Tensor<T>
+        where
+            T: Element,
+        {
+            type Output = Tensor<T>;
+            fn $method(self, rhs: Tensor<T>) -> Self::Output {
+                (&self).$method(&rhs)
+            }
+        }
+
+        impl<T> $Trait<&Tensor<T>> for Tensor<T>
+        where
+            T: Element,
+        {
+            type Output = Tensor<T>;
+            fn $method(self, rhs: &Tensor<T>) -> Self::Output {
+                (&self).$method(rhs)
+            }
+        }
+
+        impl<T> $Trait<Tensor<T>> for &Tensor<T>
+        where
+            T: Element,
+        {
+            type Output = Tensor<T>;
+            fn $method(self, rhs: Tensor<T>) -> Self::Output {
+                self.$method(&rhs)
+            }
+        }
+    };
+}
+
+elementwise_op_impl!(Add, add; AddAssign, add_assign; cpu_elemwise, cpu_elemwise);
+elementwise_op_impl!(Sub, sub; SubAddign, sub_assign; cpu_elemwise, cpu_elemwise);
+
 #[cfg(test)]
 mod tests {
 
     use crate::tensor::Tensor;
-
-    use super::*;
 
     // Tests written by claude
     #[test]

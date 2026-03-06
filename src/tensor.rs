@@ -1,16 +1,16 @@
-use num_traits::{NumOps, ToPrimitive};
+use num_traits::NumOps;
 use rand::{
-    Fill, Rng,
+    Rng,
     distr::{Distribution, StandardUniform},
 };
-use std::{fmt::Debug, io, ops::Index};
+use std::{fmt::Debug, io};
 
 pub mod ops;
 
 pub trait Element: NumOps + Copy + PartialEq + Debug {}
 impl<T: NumOps + Copy + PartialEq + Debug> Element for T {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Device {
     CPU,
     Cuda,
@@ -19,7 +19,7 @@ pub enum Device {
 #[derive(Debug, Clone)]
 pub struct Tensor<T: Element> {
     data: Vec<T>,
-    strides: Vec<usize>,
+    stride: Vec<usize>,
     shape: Vec<usize>,
     device: Device,
 }
@@ -40,17 +40,17 @@ where
             ));
         }
 
-        let mut strides: Vec<usize> = Vec::new();
-        let mut stride = 1;
+        let mut stride: Vec<usize> = Vec::new();
+        let mut s = 1;
         for dim in shape.iter().rev() {
-            strides.push(stride);
-            stride *= dim;
+            stride.push(s);
+            s *= dim;
         }
-        strides.reverse();
+        stride.reverse();
 
         Ok(Self {
             data: data,
-            strides: strides,
+            stride,
             shape: shape,
             device: device.unwrap_or(Device::CPU),
         })
@@ -65,5 +65,21 @@ where
         let rand_data: Vec<T> = rng.random_iter().take(num_elems).collect();
 
         Self::new(rand_data, shape, device)
+    }
+
+    pub fn shape(&self) -> Vec<usize> {
+        self.shape.clone()
+    }
+
+    pub fn stride(&self) -> Vec<usize> {
+        self.stride.clone()
+    }
+
+    pub fn device(&self) -> Device {
+        self.device.clone()
+    }
+
+    pub fn is_contiguous(&self) -> bool {
+        todo!()
     }
 }
