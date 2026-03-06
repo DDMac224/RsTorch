@@ -3,7 +3,7 @@ use rand::{
     Rng,
     distr::{Distribution, StandardUniform},
 };
-use std::{fmt::Debug, io};
+use std::{fmt::Debug, io, sync::Arc};
 
 pub mod ops;
 
@@ -18,10 +18,16 @@ pub enum Device {
 
 #[derive(Debug, Clone)]
 pub struct Tensor<T: Element> {
-    data: Vec<T>,
+    data: Arc<Vec<T>>,
     stride: Vec<usize>,
     shape: Vec<usize>,
     device: Device,
+    offset: usize,
+}
+
+pub enum RecursiveVec<T: Element> {
+    Value(T),
+    InnerVec(Vec<RecursiveVec<T>>),
 }
 
 impl<T> Tensor<T>
@@ -41,18 +47,19 @@ where
         }
 
         let mut stride: Vec<usize> = Vec::new();
-        let mut s = 1;
+        let mut strd = 1;
         for dim in shape.iter().rev() {
-            stride.push(s);
-            s *= dim;
+            stride.push(strd);
+            strd *= dim;
         }
         stride.reverse();
 
         Ok(Self {
-            data: data,
+            data: Arc::new(data),
             stride,
             shape: shape,
             device: device.unwrap_or(Device::CPU),
+            offset: 0,
         })
     }
 
@@ -80,6 +87,10 @@ where
     }
 
     pub fn is_contiguous(&self) -> bool {
+        todo!()
+    }
+
+    pub fn item(&self) -> RecursiveVec<T> {
         todo!()
     }
 }
