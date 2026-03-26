@@ -87,10 +87,50 @@ where
     }
 
     pub fn is_contiguous(&self) -> bool {
-        todo!()
+        // stride will never be empty
+        self.stride[self.stride.len()] == 1 as usize
+    }
+
+    fn is_broadcastable(&self, other: &Self) -> bool {
+        self.shape()
+            .iter()
+            .zip(other.shape().iter())
+            .rev()
+            .all(|(&s1, &s2)| s1 == s2 || s1 == 1 || s2 == 1)
     }
 
     pub fn item(&self) -> RecursiveVec<T> {
         todo!()
+    }
+
+    pub fn index<I: AsRef<[usize]>>(&self, idx: I) -> Self {
+        let index = idx.as_ref();
+
+        assert!(
+            index.len() <= self.shape().len(),
+            "Indexing too many dimensions."
+        );
+        assert!(
+            !self.shape.iter().zip(index.iter()).any(|(dim, i)| i >= dim),
+            "Index out of bounds."
+        );
+
+        let new_offset: usize = self
+            .stride
+            .iter()
+            .zip(index.iter())
+            .map(|(strd, i)| strd * i)
+            .sum::<usize>()
+            + self.offset;
+        let new_shape = &self.shape()[self.shape.len() - index.len()..];
+        let new_stride = &self.stride()[self.stride.len() - index.len()..];
+
+        Self {
+            data: Arc::clone(&self.data),
+            stride: Vec::from(new_stride),
+            shape: Vec::from(new_shape),
+            device: self.device(),
+            offset: new_offset,
+        }
     }
 }
