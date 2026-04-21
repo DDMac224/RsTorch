@@ -25,26 +25,16 @@ pub struct Tensor<T: Element> {
     offset: usize,
 }
 
-pub enum RecursiveVec<T: Element> {
-    Value(T),
-    InnerVec(Vec<RecursiveVec<T>>),
-}
-
 impl<T> Tensor<T>
 where
     T: Element,
 {
-    pub fn new(
-        data: Vec<T>,
-        shape: Vec<usize>,
-        device: Option<Device>,
-    ) -> Result<Tensor<T>, io::Error> {
-        if data.len() != shape.iter().product() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Length of data does not match shape",
-            ));
-        }
+    pub fn new(data: Vec<T>, shape: Vec<usize>, device: Option<Device>) -> Tensor<T> {
+        assert_eq!(
+            data.len(),
+            shape.iter().product(),
+            "Length of data does not match shape"
+        );
 
         let mut stride: Vec<usize> = Vec::new();
         let mut strd = 1;
@@ -54,16 +44,16 @@ where
         }
         stride.reverse();
 
-        Ok(Self {
+        Self {
             data: Arc::new(data),
             stride,
             shape: shape,
             device: device.unwrap_or(Device::CPU),
             offset: 0,
-        })
+        }
     }
 
-    pub fn new_rand(shape: Vec<usize>, device: Option<Device>) -> Result<Tensor<T>, io::Error>
+    pub fn new_rand(shape: Vec<usize>, device: Option<Device>) -> Tensor<T>
     where
         StandardUniform: Distribution<T>,
     {
@@ -91,6 +81,25 @@ where
         self.stride[self.stride.len()] == 1 as usize
     }
 
+    pub fn reshape(&mut self, shape: Vec<usize>) -> Result<(), io::Error> {
+        if shape.iter().product::<usize>() != self.shape().iter().product() {
+            return Err(io::Error::new(io::ErrorKind::Other, ""));
+        }
+
+        let mut stride: Vec<usize> = Vec::new();
+        let mut strd = 1;
+        for dim in shape.iter().rev() {
+            stride.push(strd);
+            strd *= dim;
+        }
+        stride.reverse();
+
+        self.shape = shape;
+        self.stride = stride;
+
+        Ok(())
+    }
+
     fn is_broadcastable(&self, other: &Self) -> bool {
         self.shape()
             .iter()
@@ -99,8 +108,15 @@ where
             .all(|(&s1, &s2)| s1 == s2 || s1 == 1 || s2 == 1)
     }
 
-    pub fn item(&self) -> RecursiveVec<T> {
-        todo!()
+    pub fn item(&self) -> Result<T, io::Error> {
+        if self.shape.len() != 1 || self.shape[0] != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "A Tensor with multiple elements cannot return a scalar.",
+            ));
+        }
+
+        Ok(self.data[self.offset])
     }
 
     pub fn index<I: AsRef<[usize]>>(&self, idx: I) -> Self {
