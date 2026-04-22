@@ -1,9 +1,10 @@
+use itertools::{self, Itertools};
 use num_traits::NumOps;
 use rand::{
     Rng,
     distr::{Distribution, StandardUniform},
 };
-use std::{fmt::Debug, io, sync::Arc};
+use std::{cmp, fmt::Debug, io, sync::Arc};
 
 pub mod ops;
 
@@ -23,6 +24,9 @@ pub struct Tensor<T: Element> {
     shape: Vec<usize>,
     device: Device,
     offset: usize,
+    broadcasted_shape: Option<Vec<usize>>,
+    broadcasted_stride: Option<Vec<usize>>,
+    broadcasted_data_cycles: Option<usize>,
 }
 
 impl<T> Tensor<T>
@@ -50,6 +54,9 @@ where
             shape: shape,
             device: device.unwrap_or(Device::CPU),
             offset: 0,
+            broadcasted_shape: None,
+            broadcasted_data_cycles: None,
+            broadcasted_stride: None,
         }
     }
 
@@ -108,6 +115,83 @@ where
             .all(|(&s1, &s2)| s1 == s2 || s1 == 1 || s2 == 1)
     }
 
+    pub fn broadcast(&mut self, other: &mut Self) {
+        assert!(self.is_broadcastable(other), "not broadcastable");
+
+        let mut new_shape: Vec<usize> = Vec::new();
+
+        let mut self_strd: Vec<usize> = Vec::new();
+        let mut other_strd: Vec<usize> = Vec::new();
+
+        for dim in self.shape.iter().zip_longest(other.shape().iter()).rev() {
+            match dim {
+                itertools::EitherOrBoth::Both(self_dim, other_dim) => {
+                    new_shape.push(cmp::max(*self_dim, *other_dim));
+                    match (self_dim, other_dim) {
+                        (1, 1) => {
+                            self_strd.push(usize::MAX);
+                            other_strd.push(usize::MAX);
+                        }
+                        (1, _) => {
+                            self_strd.push(0);
+                            other_strd.push(usize::MAX);
+                        }
+                        (_, 1) => {
+                            self_strd.push(usize::MAX);
+                            other_strd.push(0);
+                        }
+                        _ => {
+                            self_strd.push(usize::MAX);
+                            other_strd.push(usize::MAX);
+                        }
+                    }
+                }
+                itertools::EitherOrBoth::Left(self_dim) => {
+                    new_shape.push(*self_dim);
+                    self_strd.push(usize::MAX);
+                    other_strd.push(0);
+                }
+                itertools::EitherOrBoth::Right(other_dim) => {
+                    new_shape.push(*other_dim);
+                    self_strd.push(0);
+                    other_strd.push(usize::MAX);
+                }
+            }
+        }
+
+        new_shape.reverse();
+        let mut self_broadcasted_stride = self.stride();
+        let mut other_broadcasted_stride = other.stride();
+
+        if self.stride.len() < self_strd.len() {
+            let mut pad = vec![0; self_strd.len() - self.stride.len()];
+            pad.extend(self.stride());
+            self_broadcasted_stride = pad;
+        }
+        if other.stride.len() < other_strd.len() {
+            let mut pad = vec![0; other_strd.len() - other.stride().len()];
+            pad.extend(other.stride());
+            other_broadcasted_stride = pad;
+        }
+
+        self_broadcasted_stride = self_broadcasted_stride
+            .iter()
+            .zip(self_strd)
+            .map(|(strd, mask)| strd & mask)
+            .collect();
+        other_broadcasted_stride = other_broadcasted_stride
+            .iter()
+            .zip(other_strd)
+            .map(|(strd, mask)| strd & mask)
+            .collect();
+
+        self.broadcasted_stride = Some(self_broadcasted_stride);
+        self.broadcasted_shape = Some(new_shape.clone());
+
+        other.broadcasted_stride = Some(other_broadcasted_stride);
+        other.broadcasted_shape = Some(new_shape);
+    }
+
     pub fn item(&self) -> Result<T, io::Error> {
         if self.shape.len() != 1 || self.shape[0] != 1 {
             return Err(io::Error::new(
@@ -147,6 +231,9 @@ where
             shape: Vec::from(new_shape),
             device: self.device(),
             offset: new_offset,
+            broadcasted_shape: None,
+            broadcasted_data_cycles: None,
+            broadcasted_stride: None,
         }
     }
 }
