@@ -107,89 +107,97 @@ where
         Ok(())
     }
 
-    fn is_broadcastable(&self, other: &Self) -> bool {
+    fn is_broadcastable(&self, target: &Vec<usize>) -> bool {
         self.shape()
             .iter()
-            .zip(other.shape().iter())
+            .zip(target.iter())
             .rev()
-            .all(|(&s1, &s2)| s1 == s2 || s1 == 1 || s2 == 1)
+            .all(|(&ss, &ts)| ss == ts || ss == 1)
+            && self.shape.len() <= target.len()
     }
 
-    pub fn broadcast(&mut self, other: &mut Self) {
-        assert!(self.is_broadcastable(other), "not broadcastable");
+    pub fn broadcast_to(&mut self, target: &Vec<usize>) {
+        assert!(
+            self.is_broadcastable(target),
+            "Tensor of shape: {:?} cannot be broadcasted to shape: {:?}",
+            self.shape,
+            target
+        );
+        let mut strd_mask: Vec<usize> = Vec::new();
+
+        for dim in self.shape.iter().zip_longest(target.iter()).rev() {
+            match dim {
+                itertools::EitherOrBoth::Both(self_dim, target_dim) => {
+                    match (self_dim, target_dim) {
+                        (1, 1) => {
+                            strd_mask.push(usize::MAX);
+                        }
+                        (1, _) => {
+                            strd_mask.push(0);
+                        }
+                        _ => {
+                            strd_mask.push(usize::MAX);
+                        }
+                    }
+                }
+                itertools::EitherOrBoth::Left(_) => {
+                    panic!("Tensor is shorter than target");
+                }
+                itertools::EitherOrBoth::Right(_) => {
+                    strd_mask.push(0);
+                }
+            }
+        }
+        let mut self_broadcasted_stride = self.stride();
+
+        if self.stride.len() < strd_mask.len() {
+            let mut pad = vec![0; strd_mask.len() - self.stride.len()];
+            pad.extend(self.stride());
+            self_broadcasted_stride = pad;
+        }
+
+        self_broadcasted_stride = self_broadcasted_stride
+            .iter()
+            .zip(strd_mask)
+            .map(|(strd, mask)| strd & mask)
+            .collect();
+
+        self.broadcasted_stride = Some(self_broadcasted_stride);
+        self.broadcasted_shape = Some(target.clone());
+    }
+
+    pub fn broadcast_tensors(&mut self, other: &mut Self) {
+        if self.shape == other.shape {
+            return;
+        }
 
         let mut new_shape: Vec<usize> = Vec::new();
-
-        let mut self_strd: Vec<usize> = Vec::new();
-        let mut other_strd: Vec<usize> = Vec::new();
 
         for dim in self.shape.iter().zip_longest(other.shape().iter()).rev() {
             match dim {
                 itertools::EitherOrBoth::Both(self_dim, other_dim) => {
                     new_shape.push(cmp::max(*self_dim, *other_dim));
-                    match (self_dim, other_dim) {
-                        (1, 1) => {
-                            self_strd.push(usize::MAX);
-                            other_strd.push(usize::MAX);
-                        }
-                        (1, _) => {
-                            self_strd.push(0);
-                            other_strd.push(usize::MAX);
-                        }
-                        (_, 1) => {
-                            self_strd.push(usize::MAX);
-                            other_strd.push(0);
-                        }
-                        _ => {
-                            self_strd.push(usize::MAX);
-                            other_strd.push(usize::MAX);
-                        }
-                    }
                 }
                 itertools::EitherOrBoth::Left(self_dim) => {
                     new_shape.push(*self_dim);
-                    self_strd.push(usize::MAX);
-                    other_strd.push(0);
                 }
                 itertools::EitherOrBoth::Right(other_dim) => {
                     new_shape.push(*other_dim);
-                    self_strd.push(0);
-                    other_strd.push(usize::MAX);
                 }
             }
         }
 
         new_shape.reverse();
-        let mut self_broadcasted_stride = self.stride();
-        let mut other_broadcasted_stride = other.stride();
 
-        if self.stride.len() < self_strd.len() {
-            let mut pad = vec![0; self_strd.len() - self.stride.len()];
-            pad.extend(self.stride());
-            self_broadcasted_stride = pad;
-        }
-        if other.stride.len() < other_strd.len() {
-            let mut pad = vec![0; other_strd.len() - other.stride().len()];
-            pad.extend(other.stride());
-            other_broadcasted_stride = pad;
-        }
+        assert!(
+            self.is_broadcastable(&new_shape) && other.is_broadcastable(&new_shape),
+            "Tensor of shape: {:?} and Tensor of shape: {:?} are not broadcastable.",
+            self.shape,
+            other.shape()
+        );
 
-        self_broadcasted_stride = self_broadcasted_stride
-            .iter()
-            .zip(self_strd)
-            .map(|(strd, mask)| strd & mask)
-            .collect();
-        other_broadcasted_stride = other_broadcasted_stride
-            .iter()
-            .zip(other_strd)
-            .map(|(strd, mask)| strd & mask)
-            .collect();
-
-        self.broadcasted_stride = Some(self_broadcasted_stride);
-        self.broadcasted_shape = Some(new_shape.clone());
-
-        other.broadcasted_stride = Some(other_broadcasted_stride);
-        other.broadcasted_shape = Some(new_shape);
+        self.broadcast_to(&new_shape);
+        other.broadcast_to(&new_shape);
     }
 
     pub fn item(&self) -> Result<T, io::Error> {
