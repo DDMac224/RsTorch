@@ -24,9 +24,6 @@ pub struct Tensor<T: Element> {
     shape: Vec<usize>,
     device: Device,
     offset: usize,
-    broadcasted_shape: Option<Vec<usize>>,
-    broadcasted_stride: Option<Vec<usize>>,
-    broadcasted_data_cycles: Option<usize>,
 }
 
 impl<T> Tensor<T>
@@ -54,9 +51,6 @@ where
             shape: shape,
             device: device.unwrap_or(Device::CPU),
             offset: 0,
-            broadcasted_shape: None,
-            broadcasted_data_cycles: None,
-            broadcasted_stride: None,
         }
     }
 
@@ -83,9 +77,38 @@ where
         self.device.clone()
     }
 
+    pub fn contiguous(&self) {
+        let size: usize = self.shape.iter().product();
+        let mut data: Vec<T> = Vec::new();
+
+        for i in 0..size {
+            data.push(
+                self.data[self.offset
+                    + self
+                        .shape
+                        .iter()
+                        .rev()
+                        .scan(i, |acc, e| {
+                            let temp = *acc;
+                            *acc /= *e;
+                            Some(e % temp)
+                        })
+                        .zip(self.stride.iter())
+                        .fold(0, |acc, (idx, strd)| acc + (idx * strd))],
+            );
+        }
+    }
+
     pub fn is_contiguous(&self) -> bool {
-        // stride will never be empty
-        self.stride[self.stride.len()] == 1 as usize
+        let mut expt_strd: usize = 1;
+
+        for (&strd, &shp) in self.stride.iter().zip(self.shape.iter().rev()) {
+            if strd != expt_strd {
+                return false;
+            }
+            expt_strd *= shp;
+        }
+        return true;
     }
 
     pub fn reshape(&mut self, shape: Vec<usize>) -> Result<(), io::Error> {
@@ -116,7 +139,7 @@ where
             && self.shape.len() <= target.len()
     }
 
-    pub fn broadcast_to(&mut self, target: &Vec<usize>) {
+    pub fn broadcast_to(&self, target: &Vec<usize>) -> Self {
         assert!(
             self.is_broadcastable(target),
             "Tensor of shape: {:?} cannot be broadcasted to shape: {:?}",
@@ -162,15 +185,16 @@ where
             .map(|(strd, mask)| strd & mask)
             .collect();
 
-        self.broadcasted_stride = Some(self_broadcasted_stride);
-        self.broadcasted_shape = Some(target.clone());
+        Self {
+            data: Arc::clone(&self.data),
+            stride: self_broadcasted_stride,
+            shape: target.clone(),
+            device: self.device(),
+            offset: self.offset.clone(),
+        }
     }
 
-    pub fn broadcast_tensors(&mut self, other: &mut Self) {
-        if self.shape == other.shape {
-            return;
-        }
-
+    pub fn broadcast_tensors(&self, other: &Self) -> (Self, Self) {
         let mut new_shape: Vec<usize> = Vec::new();
 
         for dim in self.shape.iter().zip_longest(other.shape().iter()).rev() {
@@ -196,8 +220,10 @@ where
             other.shape()
         );
 
-        self.broadcast_to(&new_shape);
-        other.broadcast_to(&new_shape);
+        (
+            self.broadcast_to(&new_shape),
+            other.broadcast_to(&new_shape),
+        )
     }
 
     pub fn item(&self) -> Result<T, io::Error> {
@@ -227,8 +253,7 @@ where
             .stride
             .iter()
             .zip(index.iter())
-            .map(|(strd, i)| strd * i)
-            .sum::<usize>()
+            .fold(0, |acc, (strd, i)| acc + strd * i)
             + self.offset;
         let new_shape = &self.shape()[self.shape.len() - index.len()..];
         let new_stride = &self.stride()[self.stride.len() - index.len()..];
@@ -239,9 +264,6 @@ where
             shape: Vec::from(new_shape),
             device: self.device(),
             offset: new_offset,
-            broadcasted_shape: None,
-            broadcasted_data_cycles: None,
-            broadcasted_stride: None,
         }
     }
 }

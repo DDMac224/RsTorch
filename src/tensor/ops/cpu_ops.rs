@@ -1,13 +1,47 @@
+use std::{ops::Add, sync::Arc};
+
 use itertools::Itertools;
 
-use crate::tensor::{Element, Tensor};
+use crate::tensor::{Device, Element, Tensor};
 
 impl<T> Tensor<T>
 where
     T: Element,
 {
     pub fn cpu_elemwise(&self, rhs: &Self, op: fn(T, T) -> T) -> Self {
-        todo!()
+        let mut brdcsted_self = self.clone();
+        let mut brdcsted_rhs = rhs.clone();
+        if self.shape != rhs.shape {
+            (brdcsted_self, brdcsted_rhs) = self.broadcast_tensors(rhs);
+        }
+
+        let size: usize = brdcsted_self.shape.iter().product();
+
+        let mut data: Vec<T> = Vec::new();
+
+        for i in 0..size {
+            let idx = brdcsted_self.shape.iter().rev().scan(i, |acc, e| {
+                let temp = *acc;
+                *acc /= *e;
+                Some(e % temp)
+            });
+            let elem_self = brdcsted_self.offset
+                + idx
+                    .clone()
+                    .zip(brdcsted_self.stride.iter())
+                    .fold(0, |acc, (idx, strd)| acc + (idx * strd));
+            let elem_rhs = brdcsted_rhs.offset
+                + idx
+                    .zip(brdcsted_rhs.stride.iter())
+                    .fold(0, |acc, (idx, strd)| acc + (idx * strd));
+
+            data.push(op(
+                brdcsted_self.data[elem_self],
+                brdcsted_rhs.data[elem_rhs],
+            ));
+        }
+
+        Tensor::new(data, brdcsted_self.shape(), Some(Device::CPU))
     }
 
     fn matmul_matricies(&self, rhs: &Self) -> Self {
