@@ -77,7 +77,7 @@ where
         self.device.clone()
     }
 
-    pub fn contiguous(&self) {
+    pub fn contiguous(&mut self) {
         let size: usize = self.shape.iter().product();
         let mut data: Vec<T> = Vec::new();
 
@@ -97,12 +97,14 @@ where
                         .fold(0, |acc, (idx, strd)| acc + (idx * strd))],
             );
         }
+
+        self.data = Arc::new(data);
     }
 
     pub fn is_contiguous(&self) -> bool {
         let mut expt_strd: usize = 1;
 
-        for (&strd, &shp) in self.stride.iter().zip(self.shape.iter().rev()) {
+        for (&strd, &shp) in self.stride.iter().rev().zip(self.shape.iter().rev()) {
             if strd != expt_strd {
                 return false;
             }
@@ -133,8 +135,8 @@ where
     fn is_broadcastable(&self, target: &Vec<usize>) -> bool {
         self.shape()
             .iter()
-            .zip(target.iter())
             .rev()
+            .zip(target.iter().rev())
             .all(|(&ss, &ts)| ss == ts || ss == 1)
             && self.shape.len() <= target.len()
     }
@@ -148,7 +150,7 @@ where
         );
         let mut strd_mask: Vec<usize> = Vec::new();
 
-        for dim in self.shape.iter().zip_longest(target.iter()).rev() {
+        for dim in self.shape.iter().rev().zip_longest(target.iter().rev()) {
             match dim {
                 itertools::EitherOrBoth::Both(self_dim, target_dim) => {
                     match (self_dim, target_dim) {
@@ -197,7 +199,12 @@ where
     pub fn broadcast_tensors(&self, other: &Self) -> (Self, Self) {
         let mut new_shape: Vec<usize> = Vec::new();
 
-        for dim in self.shape.iter().zip_longest(other.shape().iter()).rev() {
+        for dim in self
+            .shape
+            .iter()
+            .rev()
+            .zip_longest(other.shape().iter().rev())
+        {
             match dim {
                 itertools::EitherOrBoth::Both(self_dim, other_dim) => {
                     new_shape.push(cmp::max(*self_dim, *other_dim));
@@ -227,7 +234,7 @@ where
     }
 
     pub fn item(&self) -> Result<T, io::Error> {
-        if self.shape.len() != 1 || self.shape[0] != 1 {
+        if self.shape.iter().product::<usize>() > 1 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "A Tensor with multiple elements cannot return a scalar.",
@@ -255,8 +262,8 @@ where
             .zip(index.iter())
             .fold(0, |acc, (strd, i)| acc + strd * i)
             + self.offset;
-        let new_shape = &self.shape()[self.shape.len() - index.len()..];
-        let new_stride = &self.stride()[self.stride.len() - index.len()..];
+        let new_shape = &self.shape()[self.shape.len() - (self.shape.len() - index.len())..];
+        let new_stride = &self.stride()[self.stride.len() - (self.stride.len() - index.len())..];
 
         Self {
             data: Arc::clone(&self.data),
@@ -265,5 +272,294 @@ where
             device: self.device(),
             offset: new_offset,
         }
+    }
+}
+
+// Tests written by claude
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Tensor::new
+    // =========================================================================
+
+    #[test]
+    fn test_new_basic() {
+        let t = Tensor::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2], None);
+        assert_eq!(t.shape(), vec![2, 2]);
+    }
+
+    #[test]
+    fn test_new_1d() {
+        let t = Tensor::new(vec![10i32, 20, 30], vec![3], None);
+        assert_eq!(t.shape(), vec![3]);
+        assert_eq!(t.stride(), vec![1]);
+    }
+
+    #[test]
+    fn test_new_3d_stride() {
+        // shape [2, 3, 4] → strides should be [12, 4, 1]
+        let data: Vec<f32> = (0..24).map(|x| x as f32).collect();
+        let t = Tensor::new(data, vec![2, 3, 4], None);
+        assert_eq!(t.stride(), vec![12, 4, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Length of data does not match shape")]
+    fn test_new_shape_mismatch_panics() {
+        Tensor::new(vec![1.0f32, 2.0], vec![3], None);
+    }
+
+    #[test]
+    fn test_new_device_default_is_cpu() {
+        let t = Tensor::new(vec![1u8], vec![1], None);
+        assert_eq!(t.device(), Device::CPU);
+    }
+
+    #[test]
+    fn test_new_device_explicit_cuda() {
+        let t = Tensor::new(vec![1u8], vec![1], Some(Device::Cuda));
+        assert_eq!(t.device(), Device::Cuda);
+    }
+
+    // =========================================================================
+    // Tensor::new_rand
+    // =========================================================================
+
+    #[test]
+    fn test_new_rand_shape() {
+        let t = Tensor::<f32>::new_rand(vec![4, 5], None);
+        assert_eq!(t.shape(), vec![4, 5]);
+    }
+
+    #[test]
+    fn test_new_rand_total_elements() {
+        let t = Tensor::<f64>::new_rand(vec![3, 3, 3], None);
+        // 27 elements → stride[0] == 9
+        assert_eq!(t.stride()[0], 9);
+    }
+
+    // =========================================================================
+    // is_contiguous
+    // =========================================================================
+
+    #[test]
+    fn test_is_contiguous_fresh_tensor() {
+        let t = Tensor::new(vec![0f32; 6], vec![2, 3], None);
+        assert!(t.is_contiguous());
+    }
+
+    #[test]
+    fn test_is_contiguous_1d() {
+        let t = Tensor::new(vec![1, 2, 3, 4], vec![4], None);
+        assert!(t.is_contiguous());
+    }
+
+    // =========================================================================
+    // reshape
+    // =========================================================================
+
+    #[test]
+    fn test_reshape_valid() {
+        let mut t = Tensor::new(vec![1.0f32; 12], vec![3, 4], None);
+        let result = t.reshape(vec![2, 6]);
+        assert!(result.is_ok());
+        assert_eq!(t.shape(), vec![2, 6]);
+    }
+
+    #[test]
+    fn test_reshape_to_1d() {
+        let mut t = Tensor::new(vec![1i32; 12], vec![3, 4], None);
+        assert!(t.reshape(vec![12]).is_ok());
+        assert_eq!(t.shape(), vec![12]);
+        assert_eq!(t.stride(), vec![1]);
+    }
+
+    #[test]
+    fn test_reshape_updates_stride() {
+        let mut t = Tensor::new(vec![0f64; 24], vec![2, 3, 4], None);
+        t.reshape(vec![4, 6]).unwrap();
+        assert_eq!(t.stride(), vec![6, 1]);
+    }
+
+    #[test]
+    fn test_reshape_incompatible_returns_err() {
+        let mut t = Tensor::new(vec![0f32; 6], vec![2, 3], None);
+        let result = t.reshape(vec![4, 2]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reshape_same_shape_ok() {
+        let mut t = Tensor::new(vec![1.0f32; 9], vec![3, 3], None);
+        assert!(t.reshape(vec![3, 3]).is_ok());
+    }
+
+    // =========================================================================
+    // item
+    // =========================================================================
+
+    #[test]
+    fn test_item_scalar_tensor() {
+        let t = Tensor::new(vec![42i32], vec![1], None);
+        assert_eq!(t.item().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_item_multi_element_errors() {
+        let t = Tensor::new(vec![1, 2, 3], vec![3], None);
+        assert!(t.item().is_err());
+    }
+
+    #[test]
+    fn test_item_2d_errors() {
+        let t = Tensor::new(vec![1.0f32, 2.0, 3.0, 4.0], vec![2, 2], None);
+        assert!(t.item().is_err());
+    }
+
+    // =========================================================================
+    // index
+    // =========================================================================
+
+    #[test]
+    fn test_index_1d() {
+        let t = Tensor::new(vec![10, 20, 30], vec![3], None);
+        let elem = t.index([1]);
+        println!("{:?}", elem);
+        assert_eq!(elem.item().unwrap(), 20, "{:?} != 20", elem.item().unwrap());
+    }
+
+    #[test]
+    fn test_index_2d_row() {
+        // shape [2, 3], data row-major: [[0,1,2],[3,4,5]]
+        let data: Vec<i32> = (0..6).collect();
+        let t = Tensor::new(data, vec![2, 3], None);
+        // Indexing row 1 should give a view of [3,4,5]
+        let row = t.index([1]);
+        assert_eq!(row.shape(), vec![3]);
+    }
+
+    #[test]
+    fn test_index_2d_element() {
+        let data: Vec<i32> = (0..6).collect();
+        let t = Tensor::new(data, vec![2, 3], None);
+        // t[1][2] == 5
+        let row = t.index([1]);
+        let elem = row.index([2]);
+        assert_eq!(elem.item().unwrap(), 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Index out of bounds")]
+    fn test_index_out_of_bounds_panics() {
+        let t = Tensor::new(vec![1, 2, 3], vec![3], None);
+        t.index([5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Indexing too many dimensions")]
+    fn test_index_too_many_dims_panics() {
+        let t = Tensor::new(vec![1, 2, 3], vec![3], None);
+        t.index([0, 1]);
+    }
+
+    // =========================================================================
+    // broadcast_to
+    // =========================================================================
+
+    #[test]
+    fn test_broadcast_to_adds_dim() {
+        // shape [1, 3] → broadcast to [2, 3]
+        let t = Tensor::new(vec![1.0f32, 2.0, 3.0], vec![1, 3], None);
+        let b = t.broadcast_to(&vec![2, 3]);
+        assert_eq!(b.shape(), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_broadcast_to_stride_zeroed_for_broadcast_dim() {
+        // shape [1] → broadcast to [4]: the single stride should become 0
+        let t = Tensor::new(vec![7.0f64], vec![1], None);
+        let b = t.broadcast_to(&vec![4]);
+        assert_eq!(b.stride()[0], 0);
+    }
+
+    #[test]
+    fn test_broadcast_to_same_shape() {
+        let t = Tensor::new(vec![1, 2, 3], vec![3], None);
+        let b = t.broadcast_to(&vec![3]);
+        assert_eq!(b.shape(), vec![3]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_broadcast_to_incompatible_panics() {
+        let t = Tensor::new(vec![1, 2, 3], vec![3], None);
+        t.broadcast_to(&vec![2, 2]);
+    }
+
+    // =========================================================================
+    // broadcast_tensors
+    // =========================================================================
+
+    #[test]
+    fn test_broadcast_tensors_same_shape() {
+        let a = Tensor::new(vec![1.0f32, 2.0, 3.0], vec![3], None);
+        let b = Tensor::new(vec![4.0f32, 5.0, 6.0], vec![3], None);
+        let (ba, bb) = a.broadcast_tensors(&b);
+        assert_eq!(ba.shape(), vec![3]);
+        assert_eq!(bb.shape(), vec![3]);
+    }
+
+    #[test]
+    fn test_broadcast_tensors_scalar_to_vector() {
+        // [1] and [3] → both become [3]
+        let scalar = Tensor::new(vec![5.0f32], vec![1], None);
+        let vec3 = Tensor::new(vec![1.0f32, 2.0, 3.0], vec![3], None);
+        let (bs, bv) = scalar.broadcast_tensors(&vec3);
+        assert_eq!(bs.shape(), vec![3]);
+        assert_eq!(bv.shape(), vec![3]);
+    }
+
+    #[test]
+    fn test_broadcast_tensors_different_ranks() {
+        // [1, 3] and [2, 1, 3] → both become [2, 1, 3]
+        let a = Tensor::new(vec![0f32; 3], vec![1, 3], None);
+        let b = Tensor::new(vec![0f32; 6], vec![2, 1, 3], None);
+        let (ba, bb) = a.broadcast_tensors(&b);
+        assert_eq!(ba.shape(), vec![2, 1, 3]);
+        assert_eq!(bb.shape(), vec![2, 1, 3]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_broadcast_tensors_incompatible_panics() {
+        let a = Tensor::new(vec![0f32; 2], vec![2], None);
+        let b = Tensor::new(vec![0f32; 3], vec![3], None);
+        a.broadcast_tensors(&b);
+    }
+
+    // =========================================================================
+    // Device equality
+    // =========================================================================
+
+    #[test]
+    fn test_device_equality() {
+        assert_eq!(Device::CPU, Device::CPU);
+        assert_eq!(Device::Cuda, Device::Cuda);
+        assert_ne!(Device::CPU, Device::Cuda);
+    }
+
+    // =========================================================================
+    // Arc shared data (clone does not copy underlying data)
+    // =========================================================================
+
+    #[test]
+    fn test_clone_shares_data() {
+        let t = Tensor::new(vec![1, 2, 3, 4], vec![2, 2], None);
+        let t2 = t.clone();
+        // They should be equal in value
+        assert_eq!(t.shape(), t2.shape());
+        assert_eq!(t.stride(), t2.stride());
     }
 }

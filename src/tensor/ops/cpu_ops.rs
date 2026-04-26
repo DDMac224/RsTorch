@@ -1,4 +1,4 @@
-use std::{ops::Add, sync::Arc};
+use std::{iter::repeat_n, ops::Add, sync::Arc};
 
 use itertools::Itertools;
 
@@ -45,14 +45,8 @@ where
     }
 
     fn matmul_matricies(&self, rhs: &Self) -> Self {
-        assert_eq!(
-            self.shape.len(),
-            2,
-            "Matrix matmul can only have two dimensions"
-        );
-        assert_eq!(
-            rhs.shape().len(),
-            2,
+        assert!(
+            self.shape.len() == rhs.shape().len() && self.shape.len() == 2,
             "Matrix matmul can only have two dimensions"
         );
         assert_eq!(
@@ -74,5 +68,43 @@ where
             .collect();
 
         Tensor::new(new_data, new_dims, Some(self.device()))
+    }
+
+    fn batched_matmul(&self, rhs: &Self) -> Self {
+        assert_eq!(
+            self.shape[self.shape.len() - 1],
+            rhs.shape()[rhs.shape.len()],
+            "Columns of self and rows of rhs must match"
+        );
+
+        let mut brdcsted_self = self.clone();
+        let mut brdcsted_rhs = rhs.clone();
+        if self.shape != rhs.shape {
+            (brdcsted_self, brdcsted_rhs) = self.broadcast_tensors(rhs);
+        }
+
+        let mut sliced_self_shape = brdcsted_self.shape();
+        sliced_self_shape.truncate(brdcsted_self.shape.len() - 2);
+        let size: usize = sliced_self_shape.iter().product();
+
+        for i in 0..size {
+            let offset_idx =
+                repeat_n(0, 2).chain(sliced_self_shape.iter().rev().scan(i, |acc, e| {
+                    let temp = *acc;
+                    *acc /= e;
+                    Some(e % temp)
+                }));
+            let elem_self = brdcsted_self.offset
+                + offset_idx
+                    .clone()
+                    .zip(brdcsted_self.stride.iter())
+                    .fold(0, |acc, (idx, strd)| acc + (idx * strd));
+            let elem_rhs = brdcsted_rhs.offset
+                + offset_idx
+                    .zip(brdcsted_rhs.stride.iter())
+                    .fold(0, |acc, (idx, strd)| acc + (idx * strd));
+        }
+
+        todo!()
     }
 }
