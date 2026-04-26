@@ -1,4 +1,4 @@
-use std::{iter::repeat_n, ops::Add, sync::Arc};
+use std::{cmp, iter::repeat_n, ops::Add, sync::Arc};
 
 use itertools::Itertools;
 
@@ -23,7 +23,7 @@ where
             let idx = brdcsted_self.shape.iter().rev().scan(i, |acc, e| {
                 let temp = *acc;
                 *acc /= *e;
-                Some(e % temp)
+                Some(temp % e)
             });
             let elem_self = brdcsted_self.offset
                 + idx
@@ -77,34 +77,67 @@ where
             "Columns of self and rows of rhs must match"
         );
 
+        assert!(
+            self.shape.len() > 2 || rhs.shape.len() > 2,
+            "One tensor must have more than 2 dimensions."
+        );
+
         let mut brdcsted_self = self.clone();
         let mut brdcsted_rhs = rhs.clone();
-        if self.shape != rhs.shape {
-            (brdcsted_self, brdcsted_rhs) = self.broadcast_tensors(rhs);
+        if self.shape[self.shape.len() - 2..] != rhs.shape[rhs.shape.len() - 2..] {
+            let mut new_shape: Vec<usize> = Vec::new();
+
+            for dim in self
+                .shape
+                .iter()
+                .rev()
+                .zip_longest(rhs.shape().iter().rev())
+            {
+                match dim {
+                    itertools::EitherOrBoth::Both(self_dim, other_dim) => {
+                        new_shape.push(cmp::max(*self_dim, *other_dim));
+                    }
+                    itertools::EitherOrBoth::Left(self_dim) => {
+                        new_shape.push(*self_dim);
+                    }
+                    itertools::EitherOrBoth::Right(other_dim) => {
+                        new_shape.push(*other_dim);
+                    }
+                }
+            }
+            new_shape.truncate(new_shape.len() - 2);
+
+            let mut new_shape_self = new_shape.clone();
+            new_shape_self.extend_from_slice(&self.shape()[self.shape.len() - 2..]);
+            let mut new_shape_rhs = new_shape;
+            new_shape_rhs.extend_from_slice(&rhs.shape()[rhs.shape.len() - 2..]);
+
+            brdcsted_self = self.broadcast_to(&new_shape_self);
+            brdcsted_rhs = rhs.broadcast_to(&new_shape_rhs);
         }
 
-        let mut sliced_self_shape = brdcsted_self.shape();
-        sliced_self_shape.truncate(brdcsted_self.shape.len() - 2);
-        let size: usize = sliced_self_shape.iter().product();
+        let mut new_shape = brdcsted_self.shape();
+        new_shape.truncate(brdcsted_self.shape.len() - 2);
+        let size: usize = new_shape.iter().product();
+        new_shape.push(brdcsted_self.shape[brdcsted_self.shape.len() - 1]);
+        new_shape.push(brdcsted_rhs.shape[brdcsted_rhs.shape.len()]);
+
+        let mut new_data: Vec<T> = Vec::new();
 
         for i in 0..size {
-            let offset_idx =
-                repeat_n(0, 2).chain(sliced_self_shape.iter().rev().scan(i, |acc, e| {
+            let offset_idx = repeat_n(0, 2)
+                .chain(new_shape.iter().rev().scan(i, |acc, e| {
                     let temp = *acc;
                     *acc /= e;
                     Some(e % temp)
-                }));
-            let elem_self = brdcsted_self.offset
-                + offset_idx
-                    .clone()
-                    .zip(brdcsted_self.stride.iter())
-                    .fold(0, |acc, (idx, strd)| acc + (idx * strd));
-            let elem_rhs = brdcsted_rhs.offset
-                + offset_idx
-                    .zip(brdcsted_rhs.stride.iter())
-                    .fold(0, |acc, (idx, strd)| acc + (idx * strd));
+                }))
+                .collect::<Vec<usize>>();
+            let elem_self = brdcsted_self.index(offset_idx.clone());
+            let elem_rhs = brdcsted_rhs.index(offset_idx);
+
+            new_data.extend_from_slice(elem_self.matmul_matricies(&elem_rhs).data.as_slice());
         }
 
-        todo!()
+        Tensor::new(new_data, new_shape, Some(Device::CPU))
     }
 }

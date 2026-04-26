@@ -81,6 +81,10 @@ where
         let size: usize = self.shape.iter().product();
         let mut data: Vec<T> = Vec::new();
 
+        dbg!(self.offset);
+        dbg!(&self.shape);
+        dbg!(&self.stride);
+
         for i in 0..size {
             data.push(
                 self.data[self.offset
@@ -91,14 +95,25 @@ where
                         .scan(i, |acc, e| {
                             let temp = *acc;
                             *acc /= *e;
-                            Some(e % temp)
+                            Some(temp % e)
                         })
-                        .zip(self.stride.iter())
+                        .zip(self.stride.iter().rev())
                         .fold(0, |acc, (idx, strd)| acc + (idx * strd))],
             );
         }
 
         self.data = Arc::new(data);
+        self.offset = 0;
+
+        let mut stride: Vec<usize> = Vec::new();
+        let mut strd = 1;
+        for dim in self.shape.iter().rev() {
+            stride.push(strd);
+            strd *= dim;
+        }
+        stride.reverse();
+
+        self.stride = stride;
     }
 
     pub fn is_contiguous(&self) -> bool {
@@ -116,6 +131,10 @@ where
     pub fn reshape(&mut self, shape: Vec<usize>) -> Result<(), io::Error> {
         if shape.iter().product::<usize>() != self.shape().iter().product() {
             return Err(io::Error::new(io::ErrorKind::Other, ""));
+        }
+
+        if !self.is_contiguous() {
+            self.contiguous();
         }
 
         let mut stride: Vec<usize> = Vec::new();
@@ -173,6 +192,7 @@ where
                 }
             }
         }
+        strd_mask.reverse();
         let mut self_broadcasted_stride = self.stride();
 
         if self.stride.len() < strd_mask.len() {
@@ -338,6 +358,76 @@ mod tests {
         let t = Tensor::<f64>::new_rand(vec![3, 3, 3], None);
         // 27 elements → stride[0] == 9
         assert_eq!(t.stride()[0], 9);
+    }
+
+    // =========================================================================
+    // contiguous
+    // =========================================================================
+
+    #[test]
+    fn test_contiguous_already_contiguous_unchanged() {
+        let data: Vec<i32> = (0..6).collect();
+        let mut t = Tensor::new(data.clone(), vec![2, 3], None);
+        t.contiguous();
+        // Data and shape should be identical
+        assert_eq!(t.shape(), vec![2, 3]);
+        for i in 0..6 {
+            assert_eq!(t.index([i / 3, i % 3]).item().unwrap(), data[i]);
+        }
+    }
+
+    #[test]
+    fn test_contiguous_resets_offset() {
+        // index() advances the offset — contiguous() should reset it to 0
+        let data: Vec<i32> = (0..6).collect();
+        let t = Tensor::new(data, vec![2, 3], None);
+        let mut row = t.index([1]); // offset is now 3
+        row.contiguous();
+        assert_eq!(row.offset, 0);
+    }
+
+    #[test]
+    fn test_contiguous_broadcast_stride_materializes_correctly() {
+        // broadcast [1, 3] → [2, 3], then contiguous should produce real duplicated data
+        let t = Tensor::new(vec![1i32, 2, 3], vec![1, 3], None);
+        let mut b = t.broadcast_to(&vec![2, 3]);
+        b.contiguous();
+        // After contiguous the data should be [1, 2, 3, 1, 2, 3]
+        assert_eq!(b.index([0, 0]).item().unwrap(), 1);
+        assert_eq!(b.index([0, 1]).item().unwrap(), 2);
+        assert_eq!(b.index([0, 2]).item().unwrap(), 3);
+        assert_eq!(b.index([1, 0]).item().unwrap(), 1);
+        assert_eq!(b.index([1, 1]).item().unwrap(), 2);
+        assert_eq!(b.index([1, 2]).item().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_contiguous_is_contiguous_after_broadcast() {
+        let t = Tensor::new(vec![1i32, 2, 3], vec![1, 3], None);
+        let mut b = t.broadcast_to(&vec![2, 3]);
+        assert!(!b.is_contiguous()); // broadcast strides are non-standard
+        b.contiguous();
+        assert!(b.is_contiguous());
+    }
+
+    #[test]
+    fn test_contiguous_index_math_correctness() {
+        // 3D case: shape [2, 3, 4], verify every element maps correctly
+        let data: Vec<i32> = (0..24).collect();
+        let mut t = Tensor::new(data, vec![2, 3, 4], None);
+        t.contiguous();
+        // Element at logical position [i, j, k] should be i*12 + j*4 + k
+        for i in 0..2 {
+            for j in 0..3 {
+                for k in 0..4 {
+                    assert_eq!(
+                        t.index([i, j, k]).item().unwrap(),
+                        (i * 12 + j * 4 + k) as i32,
+                        "Mismatch at [{i},{j},{k}]"
+                    );
+                }
+            }
+        }
     }
 
     // =========================================================================
