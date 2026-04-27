@@ -85,10 +85,6 @@ where
         let size: usize = self.shape.iter().product();
         let mut data: Vec<T> = Vec::new();
 
-        dbg!(self.offset);
-        dbg!(&self.shape);
-        dbg!(&self.stride);
-
         for i in 0..size {
             data.push(
                 self.data[self.offset

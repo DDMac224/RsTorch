@@ -28,11 +28,11 @@ where
             let elem_self = brdcsted_self.offset
                 + idx
                     .clone()
-                    .zip(brdcsted_self.stride.iter())
+                    .zip(brdcsted_self.stride.iter().rev())
                     .fold(0, |acc, (idx, strd)| acc + (idx * strd));
             let elem_rhs = brdcsted_rhs.offset
                 + idx
-                    .zip(brdcsted_rhs.stride.iter())
+                    .zip(brdcsted_rhs.stride.iter().rev())
                     .fold(0, |acc, (idx, strd)| acc + (idx * strd));
 
             data.push(op(
@@ -50,24 +50,31 @@ where
             "Matrix matmul can only have two dimensions"
         );
         assert_eq!(
-            self.shape[1],
-            rhs.shape()[0],
+            self.shape[1], rhs.shape[0],
             "Columns of self and rows of rhs must match"
         );
 
         let new_dims = vec![self.shape[0], rhs.shape()[1]];
 
-        let self_rows = self.data.iter().skip(self.offset).step_by(self.stride[1]);
-        let rhs_cols = rhs.data.iter().skip(rhs.offset).step_by(rhs.stride[0]);
+        let mut data: Vec<T> = Vec::new();
 
-        let products = self_rows.zip(rhs_cols).map(|(&s, &r)| s * r);
-        let new_data = products
-            .chunks(self.shape[1])
-            .into_iter()
-            .map(|chunk| chunk.reduce(|acc, e| acc + e).unwrap())
-            .collect();
+        for i in 0..self.shape[0] {
+            for j in 0..rhs.shape[1] {
+                let sum = (0..self.shape[1])
+                    .map(|k| {
+                        let self_elem =
+                            self.data[self.offset + i * self.stride[0] + k * self.stride[1]];
+                        let rhs_elem = rhs.data[rhs.offset + j * rhs.stride[1] + k * rhs.stride[0]];
+                        self_elem * rhs_elem
+                    })
+                    .reduce(|acc, e| acc + e)
+                    .expect("Data was empty");
 
-        Tensor::new(new_data, new_dims, Some(self.device()))
+                data.push(sum);
+            }
+        }
+
+        Tensor::new(data, new_dims, Some(self.device()))
     }
 
     fn batched_matmul(&self, rhs: &Self) -> Self {
