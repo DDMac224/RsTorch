@@ -1,4 +1,4 @@
-use std::{cmp, iter::repeat_n, ops::Add, sync::Arc};
+use std::{cmp, iter::repeat_n};
 
 use itertools::Itertools;
 
@@ -139,5 +139,15 @@ where
         }
 
         Tensor::new(new_data, new_shape, Some(Device::CPU))
+    }
+
+    pub fn cpu_matmul(&self, rhs: &Self) -> Self {
+        if self.shape.len() == 2 && rhs.shape.len() == 2 {
+            return self.matmul_matricies(rhs);
+        } else if self.is_scalar() || rhs.is_scalar() {
+            return self.cpu_elemwise(rhs, T::mul);
+        } else {
+            return self.batched_matmul(rhs);
+        }
     }
 }
