@@ -1,5 +1,5 @@
 use std::{
-    ops::{Add, AddAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Mul, Sub, SubAssign},
     sync::Arc,
 };
 
@@ -81,6 +81,26 @@ macro_rules! elementwise_op_impl {
 
 elementwise_op_impl!(Add, add; AddAssign, add_assign; cpu_elemwise, cpu_elemwise);
 elementwise_op_impl!(Sub, sub; SubAssign, sub_assign; cpu_elemwise, cpu_elemwise);
+
+impl<T> Mul<&Tensor<T>> for &Tensor<T>
+where
+    T: Element,
+{
+    type Output = Tensor<T>;
+
+    fn mul(self, rhs: &Tensor<T>) -> Self::Output {
+        assert_eq!(
+            self.device(),
+            rhs.device(),
+            "Tensors must be on the same device"
+        );
+
+        match self.device() {
+            Device::CPU => self.cpu_matmul(rhs),
+            Device::Cuda => panic!("unimplemented"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {}
