@@ -1,4 +1,5 @@
 mod add;
+mod matmul;
 
 macro_rules! op_impl {
     ($Trait:ident, $method:ident; $fn:ident, $backward:ident) => {
@@ -45,6 +46,23 @@ macro_rules! op_impl {
             type Output = Tensor<T>;
             fn $method(self, rhs: Tensor<T>) -> Self::Output {
                 self.$method(&rhs)
+            }
+        }
+    };
+
+    ($method:ident; $fn:ident, $backward:ident) => {
+        impl<T> Tensor<T>
+        where
+            T: Element,
+        {
+            fn $method(&self, rhs: &Tensor<T>) -> Self {
+                assert_eq!(
+                    self.device(),
+                    rhs.device(),
+                    "Tensors must be on the same device"
+                );
+
+                self.$fn(rhs)
             }
         }
     };

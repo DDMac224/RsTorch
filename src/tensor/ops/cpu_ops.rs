@@ -8,7 +8,7 @@ impl<T> Tensor<T>
 where
     T: Element,
 {
-    pub fn cpu_elemwise(&self, rhs: &Self, op: fn(T, T) -> T) -> Self {
+    pub fn cpu_elemwise_bin(&self, rhs: &Self, op: fn(T, T) -> T) -> Self {
         let mut brdcsted_self = self.clone();
         let mut brdcsted_rhs = rhs.clone();
         if self.shape != rhs.shape {
@@ -42,6 +42,35 @@ where
         }
 
         Tensor::new(data, brdcsted_self.shape(), Some(Device::CPU), None)
+    }
+
+    pub fn cpu_elemwise_uni(&self, op: fn(T) -> T) -> Self {
+        let size: usize = self.shape.iter().product();
+
+        let mut data: Vec<T> = Vec::new();
+
+        if self.is_contiguous() {
+            for i in 0..size {
+                data.push(op(self.data[self.offset + i]));
+            }
+        } else {
+            for i in 0..size {
+                let idx = self.shape.iter().rev().scan(i, |acc, e| {
+                    let temp = *acc;
+                    *acc /= *e;
+                    Some(temp % e)
+                });
+                let elem_self = self.offset
+                    + idx
+                        .clone()
+                        .zip(self.stride.iter().rev())
+                        .fold(0, |acc, (idx, strd)| acc + (idx * strd));
+
+                data.push(op(self.data[elem_self]));
+            }
+        }
+
+        Tensor::new(data, self.shape(), Some(Device::CPU), None)
     }
 
     fn matmul_matricies(&self, rhs: &Self) -> Self {
@@ -152,7 +181,7 @@ where
         if self.shape.len() == 2 && rhs.shape.len() == 2 {
             return self.matmul_matricies(rhs);
         } else if self.is_scalar() || rhs.is_scalar() {
-            return self.cpu_elemwise(rhs, T::mul);
+            return self.cpu_elemwise_bin(rhs, T::mul);
         } else {
             return self.batched_matmul(rhs);
         }
@@ -203,7 +232,7 @@ mod tests {
         fn add_1d() {
             let a = t(vec![1.0, 2.0, 3.0], vec![3]);
             let b = t(vec![4.0, 5.0, 6.0], vec![3]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![3]);
             assert_eq!(collect(&c), vec![5.0, 7.0, 9.0]);
         }
@@ -212,7 +241,7 @@ mod tests {
         fn sub_1d() {
             let a = t(vec![5.0, 6.0, 7.0], vec![3]);
             let b = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise(&b, |x, y| x - y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x - y);
             assert_eq!(collect(&c), vec![4.0, 4.0, 4.0]);
         }
 
@@ -220,7 +249,7 @@ mod tests {
         fn mul_1d() {
             let a = t(vec![2.0, 3.0, 4.0], vec![3]);
             let b = t(vec![5.0, 6.0, 7.0], vec![3]);
-            let c = a.cpu_elemwise(&b, |x, y| x * y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x * y);
             assert_eq!(collect(&c), vec![10.0, 18.0, 28.0]);
         }
 
@@ -228,7 +257,7 @@ mod tests {
         fn div_1d() {
             let a = t(vec![6.0, 8.0, 9.0], vec![3]);
             let b = t(vec![2.0, 4.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise(&b, |x, y| x / y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x / y);
             assert_eq!(collect(&c), vec![3.0, 2.0, 3.0]);
         }
 
@@ -236,7 +265,7 @@ mod tests {
         fn add_2d() {
             let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
             let b = t(vec![10.0, 20.0, 30.0, 40.0], vec![2, 2]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![2, 2]);
             assert_eq!(collect(&c), vec![11.0, 22.0, 33.0, 44.0]);
         }
@@ -248,7 +277,7 @@ mod tests {
             // [3] op [1] → [3]
             let a = t(vec![1.0, 2.0, 3.0], vec![3]);
             let b = t(vec![10.0], vec![1]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![3]);
             assert_eq!(collect(&c), vec![11.0, 12.0, 13.0]);
         }
@@ -258,7 +287,7 @@ mod tests {
             // [1] op [3] → [3]
             let a = t(vec![10.0], vec![1]);
             let b = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![3]);
             assert_eq!(collect(&c), vec![11.0, 12.0, 13.0]);
         }
@@ -268,7 +297,7 @@ mod tests {
             // [2,2] + [1,2] → [2,2]: each row gets the same addend
             let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
             let b = t(vec![10.0, 20.0], vec![1, 2]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![2, 2]);
             assert_eq!(collect(&c), vec![11.0, 22.0, 13.0, 24.0]);
         }
@@ -278,7 +307,7 @@ mod tests {
             // [2,2] + [2,1] → [2,2]: each column gets the same addend
             let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
             let b = t(vec![10.0, 20.0], vec![2, 1]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![2, 2]);
             assert_eq!(collect(&c), vec![11.0, 12.0, 23.0, 24.0]);
         }
@@ -288,7 +317,7 @@ mod tests {
             // [2,1,3] + [1,2,3] → [2,2,3]
             let a = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 1, 3]);
             let b = t(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0], vec![1, 2, 3]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![2, 2, 3]);
             assert_eq!(
                 collect(&c),
@@ -304,7 +333,7 @@ mod tests {
         fn custom_op_max() {
             let a = t(vec![1.0, 5.0, 3.0], vec![3]);
             let b = t(vec![4.0, 2.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise(&b, f32::max);
+            let c = a.cpu_elemwise_bin(&b, f32::max);
             assert_eq!(collect(&c), vec![4.0, 5.0, 3.0]);
         }
 
@@ -314,7 +343,7 @@ mod tests {
         fn result_device_is_cpu() {
             let a = t(vec![1.0], vec![1]);
             let b = t(vec![2.0], vec![1]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.device(), Device::CPU);
         }
 
@@ -322,7 +351,7 @@ mod tests {
         fn result_shape_matches_broadcast_shape() {
             let a = t(vec![1.0, 2.0, 3.0], vec![1, 3]);
             let b = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
-            let c = a.cpu_elemwise(&b, |x, y| x + y);
+            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
             assert_eq!(c.shape(), vec![2, 3]);
         }
     }

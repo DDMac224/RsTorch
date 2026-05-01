@@ -1,4 +1,4 @@
-use num_traits::{NumOps, One, Zero};
+use num_traits::{Float, NumOps, One, Zero};
 use rand::{
     Rng,
     distr::{Distribution, StandardUniform},
@@ -19,6 +19,8 @@ pub mod ops;
 
 pub trait Element: NumOps + Zero + One + Copy + PartialEq + Debug + 'static {}
 impl<T: NumOps + Zero + One + Copy + PartialEq + Debug + 'static> Element for T {}
+
+pub trait FloatElement: Element + Float {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Device {

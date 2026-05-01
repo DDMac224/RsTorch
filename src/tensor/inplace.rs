@@ -53,7 +53,7 @@ where
         self.stride = stride;
     }
 
-    pub fn reshape(&mut self, shape: Vec<usize>) -> Self {
+    pub fn reshape(&self, shape: Vec<usize>) -> Self {
         assert!(
             shape.iter().product::<usize>() == self.shape().iter().product(),
             "Shape of: {:?} is not compatible with tensor of size: {:?}.",
@@ -61,10 +61,12 @@ where
             self.shape().iter().product::<usize>()
         );
 
+        let mut data = self.data.clone();
         if !self.is_contiguous() {
-            self.contiguous();
+            let mut cont = self.clone();
+            cont.contiguous();
+            data = cont.data;
         }
-
         let mut stride: Vec<usize> = Vec::new();
         let mut strd = 1;
         for dim in shape.iter().rev() {
@@ -74,7 +76,7 @@ where
         stride.reverse();
 
         Self {
-            data: Arc::clone(&self.data),
+            data: data,
             stride: stride,
             shape: shape,
             device: self.device(),
@@ -85,9 +87,12 @@ where
         }
     }
 
-    pub fn transpose(&mut self) -> Self {
+    pub fn transpose(&self) -> Self {
+        let mut data = self.data.clone();
         if !self.is_contiguous() {
-            self.contiguous();
+            let mut cont = self.clone();
+            cont.contiguous();
+            data = cont.data;
         }
 
         let mut new_shape = self.shape();
@@ -96,7 +101,7 @@ where
         new_stride.swap(self.stride.len() - 2, self.stride.len() - 1);
 
         Self {
-            data: Arc::clone(&self.data),
+            data: data,
             stride: new_stride,
             shape: new_shape,
             device: self.device(),
