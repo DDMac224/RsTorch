@@ -72,7 +72,6 @@ where
             offset: self.offset.clone(),
             grad: Arc::clone(&self.grad),
             requires_grad: self.requires_grad,
-            // change so it doesn't need to be cloned
             grad_fn: Arc::clone(&self.grad_fn),
         }
     }

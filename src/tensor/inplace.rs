@@ -84,4 +84,26 @@ where
             grad_fn: Arc::new(Mutex::new(None)),
         }
     }
+
+    pub fn transpose(&mut self) -> Self {
+        if !self.is_contiguous() {
+            self.contiguous();
+        }
+
+        let mut new_shape = self.shape();
+        let mut new_stride = self.stride();
+        new_shape.swap(self.shape.len() - 2, self.shape.len() - 1);
+        new_stride.swap(self.stride.len() - 2, self.stride.len() - 1);
+
+        Self {
+            data: Arc::clone(&self.data),
+            stride: new_stride,
+            shape: new_shape,
+            device: self.device(),
+            offset: self.offset,
+            grad: Arc::new(Mutex::new(None)),
+            requires_grad: self.requires_grad,
+            grad_fn: Arc::new(Mutex::new(None)),
+        }
+    }
 }
