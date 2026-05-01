@@ -1,22 +1,15 @@
-use std::{
-    ops::{Add, AddAssign, Mul, Sub, SubAssign},
-    sync::Arc,
-};
-
 use crate::tensor::{Device, Element, Tensor};
 
 mod cpu_ops;
 mod cuda_ops;
 
-macro_rules! elementwise_op_impl {
-    ($Trait:ident, $method:ident; $TraitAssign:ident,$method_assign:ident; $cpu_fn:ident, $cuda_fn:ident) => {
-        impl<T> $Trait<&Tensor<T>> for &Tensor<T>
+macro_rules! elemwise_op_impl {
+    ($method:ident; $cpu_fn:ident, $cuda_fn:ident, $scalar_op:ident) => {
+        impl<T> Tensor<T>
         where
             T: Element,
         {
-            type Output = Tensor<T>;
-            fn $method(self, rhs: &Tensor<T>) -> Self::Output {
-                assert_eq!(self.shape(), rhs.shape(), "Dimension mismatch");
+            pub fn $method(&self, rhs: &Tensor<T>) -> Tensor<T> {
                 assert_eq!(
                     self.device(),
                     rhs.device(),
@@ -24,83 +17,42 @@ macro_rules! elementwise_op_impl {
                 );
 
                 match self.device() {
-                    Device::CPU => self.$cpu_fn(&rhs, T::$method),
-                    Device::Cuda => self.$cuda_fn(&rhs, T::$method),
+                    Device::CPU => self.$cpu_fn(&rhs, T::$scalar_op),
+                    Device::Cuda => self.$cuda_fn(&rhs, T::$scalar_op),
                 }
-            }
-        }
-
-        impl<T> $Trait<Tensor<T>> for Tensor<T>
-        where
-            T: Element,
-        {
-            type Output = Tensor<T>;
-            fn $method(self, rhs: Tensor<T>) -> Self::Output {
-                (&self).$method(&rhs)
-            }
-        }
-
-        impl<T> $Trait<&Tensor<T>> for Tensor<T>
-        where
-            T: Element,
-        {
-            type Output = Tensor<T>;
-            fn $method(self, rhs: &Tensor<T>) -> Self::Output {
-                (&self).$method(rhs)
-            }
-        }
-
-        impl<T> $Trait<Tensor<T>> for &Tensor<T>
-        where
-            T: Element,
-        {
-            type Output = Tensor<T>;
-            fn $method(self, rhs: Tensor<T>) -> Self::Output {
-                self.$method(&rhs)
-            }
-        }
-
-        impl<T> $TraitAssign<&Tensor<T>> for Tensor<T>
-        where
-            T: Element,
-        {
-            fn $method_assign(&mut self, rhs: &Tensor<T>) {
-                *self = (&*self).$method(rhs);
-            }
-        }
-        impl<T> $TraitAssign<Tensor<T>> for Tensor<T>
-        where
-            T: Element,
-        {
-            fn $method_assign(&mut self, rhs: Tensor<T>) {
-                self.$method_assign(&rhs)
             }
         }
     };
 }
 
-elementwise_op_impl!(Add, add; AddAssign, add_assign; cpu_elemwise, cpu_elemwise);
-elementwise_op_impl!(Sub, sub; SubAssign, sub_assign; cpu_elemwise, cpu_elemwise);
+elemwise_op_impl!(elemwise_add;  cpu_elemwise, cuda_elemwise, add);
+elemwise_op_impl!(elemwise_sub; cpu_elemwise, cuda_elemwise, add);
+elemwise_op_impl!(elemwise_mul; cpu_elemwise, cuda_elemwise, mul);
+elemwise_op_impl!(elemwise_div; cpu_elemwise, cuda_elemwise, div);
 
-impl<T> Mul<&Tensor<T>> for &Tensor<T>
-where
-    T: Element,
-{
-    type Output = Tensor<T>;
+macro_rules! tensor_op_impl {
+    ($method:ident; $cpu_fn:ident, $cuda_fn:ident) => {
+        impl<T> Tensor<T>
+        where
+            T: Element,
+        {
+            pub fn $method(&self, rhs: &Tensor<T>) -> Tensor<T> {
+                assert_eq!(
+                    self.device(),
+                    rhs.device(),
+                    "Tensors must be on the same device"
+                );
 
-    fn mul(self, rhs: &Tensor<T>) -> Self::Output {
-        assert_eq!(
-            self.device(),
-            rhs.device(),
-            "Tensors must be on the same device"
-        );
-
-        match self.device() {
-            Device::CPU => self.cpu_matmul(rhs),
-            Device::Cuda => panic!("unimplemented"),
+                match self.device() {
+                    Device::CPU => self.$cpu_fn(&rhs),
+                    Device::Cuda => self.$cuda_fn(&rhs),
+                }
+            }
         }
-    }
+    };
 }
+
+tensor_op_impl!(mul; cpu_matmul, cuda_matmul);
 
 #[cfg(test)]
 mod tests {}

@@ -41,7 +41,7 @@ where
             ));
         }
 
-        Tensor::new(data, brdcsted_self.shape(), Some(Device::CPU))
+        Tensor::new(data, brdcsted_self.shape(), Some(Device::CPU), None)
     }
 
     fn matmul_matricies(&self, rhs: &Self) -> Self {
@@ -74,7 +74,7 @@ where
             }
         }
 
-        Tensor::new(data, new_dims, Some(self.device()))
+        Tensor::new(data, new_dims, Some(self.device()), None)
     }
 
     fn batched_matmul(&self, rhs: &Self) -> Self {
@@ -145,7 +145,7 @@ where
             new_data.extend_from_slice(elem_self.matmul_matricies(&elem_rhs).data.as_slice());
         }
 
-        Tensor::new(new_data, new_shape, Some(Device::CPU))
+        Tensor::new(new_data, new_shape, Some(Device::CPU), None)
     }
 
     pub fn cpu_matmul(&self, rhs: &Self) -> Self {
@@ -187,7 +187,7 @@ mod tests {
     }
 
     fn t(data: Vec<f32>, shape: Vec<usize>) -> Tensor<f32> {
-        Tensor::new(data, shape, Some(Device::CPU))
+        Tensor::new(data, shape, Some(Device::CPU), None)
     }
 
     // =========================================================================

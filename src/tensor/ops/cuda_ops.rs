@@ -4,7 +4,11 @@ impl<T> Tensor<T>
 where
     T: Element,
 {
-    fn cuda_elemwise(&self, rhs: &Self, op: fn(T, T) -> T) -> Self {
+    pub fn cuda_elemwise(&self, rhs: &Self, op: fn(T, T) -> T) -> Self {
+        todo!()
+    }
+
+    pub fn cuda_matmul(&self, rhs: &Self) -> Self {
         todo!()
     }
 }
