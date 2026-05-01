@@ -1,11 +1,9 @@
-use itertools::{self, Itertools};
 use num_traits::{NumOps, One, Zero};
 use rand::{
     Rng,
     distr::{Distribution, StandardUniform},
 };
 use std::{
-    cmp,
     fmt::Debug,
     io,
     iter::repeat,
@@ -14,6 +12,9 @@ use std::{
 
 use crate::autograd::BackwardFn;
 
+pub mod broadcast;
+pub mod grad;
+pub mod inplace;
 pub mod ops;
 
 pub trait Element: NumOps + Zero + One + Copy + PartialEq + Debug + 'static {}
@@ -130,221 +131,8 @@ where
         self.device.clone()
     }
 
-    pub fn requires_grad(&self) -> bool {
-        self.requires_grad
-    }
-
-    pub(crate) fn set_grad_fn(&self, grad_fn: Arc<dyn BackwardFn<T>>) {
-        let mut mutable_fn = self.grad_fn.lock().unwrap();
-        match *mutable_fn {
-            Some(ref mut fn_ref) => *fn_ref = Arc::clone(&grad_fn),
-            None => *mutable_fn = Some(Arc::clone(&grad_fn)),
-        }
-    }
-
-    pub(crate) fn set_grad(&self, grad: Arc<Tensor<T>>) {
-        let mut mutable_grad = self.grad.lock().unwrap();
-        match *mutable_grad {
-            Some(ref mut grad_ref) => *grad_ref = Arc::clone(&grad),
-            None => *mutable_grad = Some(Arc::clone(&grad)),
-        }
-    }
-
-    pub(crate) fn update_grad(&self, grad: Arc<Tensor<T>>) {
-        let mut mutable_grad = self.grad.lock().unwrap();
-        match *mutable_grad {
-            Some(ref mut grad_ref) => *grad_ref = Arc::clone(&grad).elemwise_add(grad_ref).into(),
-            None => *mutable_grad = Some(Arc::clone(&grad)),
-        }
-    }
-
     pub fn is_scalar(&self) -> bool {
         self.shape.iter().product::<usize>() == 1
-    }
-
-    pub fn is_contiguous(&self) -> bool {
-        let mut expt_strd: usize = 1;
-
-        for (&strd, &shp) in self.stride.iter().rev().zip(self.shape.iter().rev()) {
-            if strd != expt_strd {
-                return false;
-            }
-            expt_strd *= shp;
-        }
-        return true;
-    }
-
-    pub fn contiguous(&mut self) {
-        let size: usize = self.shape.iter().product();
-        let mut data: Vec<T> = Vec::new();
-
-        for i in 0..size {
-            data.push(
-                self.data[self.offset
-                    + self
-                        .shape
-                        .iter()
-                        .rev()
-                        .scan(i, |acc, e| {
-                            let temp = *acc;
-                            *acc /= *e;
-                            Some(temp % e)
-                        })
-                        .zip(self.stride.iter().rev())
-                        .fold(0, |acc, (idx, strd)| acc + (idx * strd))],
-            );
-        }
-
-        self.data = Arc::new(data);
-        self.offset = 0;
-
-        let mut stride: Vec<usize> = Vec::new();
-        let mut strd = 1;
-        for dim in self.shape.iter().rev() {
-            stride.push(strd);
-            strd *= dim;
-        }
-        stride.reverse();
-
-        self.stride = stride;
-    }
-
-    pub fn reshape(&mut self, shape: Vec<usize>) -> Self {
-        assert!(
-            shape.iter().product::<usize>() == self.shape().iter().product(),
-            "Shape of: {:?} is not compatible with tensor of size: {:?}.",
-            shape,
-            self.shape().iter().product::<usize>()
-        );
-
-        if !self.is_contiguous() {
-            self.contiguous();
-        }
-
-        let mut stride: Vec<usize> = Vec::new();
-        let mut strd = 1;
-        for dim in shape.iter().rev() {
-            stride.push(strd);
-            strd *= dim;
-        }
-        stride.reverse();
-
-        Self {
-            data: Arc::clone(&self.data),
-            stride: stride,
-            shape: shape,
-            device: self.device(),
-            offset: self.offset,
-            grad: Arc::new(Mutex::new(None)),
-            requires_grad: self.requires_grad,
-            grad_fn: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    fn is_broadcastable(&self, target: &Vec<usize>) -> bool {
-        self.shape()
-            .iter()
-            .rev()
-            .zip(target.iter().rev())
-            .all(|(&ss, &ts)| ss == ts || ss == 1)
-            && self.shape.len() <= target.len()
-    }
-
-    pub fn broadcast_to(&self, target: &Vec<usize>) -> Self {
-        assert!(
-            self.is_broadcastable(target),
-            "Tensor of shape: {:?} cannot be broadcasted to shape: {:?}",
-            self.shape,
-            target
-        );
-        let mut strd_mask: Vec<usize> = Vec::new();
-
-        for dim in self.shape.iter().rev().zip_longest(target.iter().rev()) {
-            match dim {
-                itertools::EitherOrBoth::Both(self_dim, target_dim) => {
-                    match (self_dim, target_dim) {
-                        (1, 1) => {
-                            strd_mask.push(usize::MAX);
-                        }
-                        (1, _) => {
-                            strd_mask.push(0);
-                        }
-                        _ => {
-                            strd_mask.push(usize::MAX);
-                        }
-                    }
-                }
-                itertools::EitherOrBoth::Left(_) => {
-                    panic!("Tensor is shorter than target");
-                }
-                itertools::EitherOrBoth::Right(_) => {
-                    strd_mask.push(0);
-                }
-            }
-        }
-        strd_mask.reverse();
-        let mut self_broadcasted_stride = self.stride();
-
-        if self.stride.len() < strd_mask.len() {
-            let mut pad = vec![0; strd_mask.len() - self.stride.len()];
-            pad.extend(self.stride());
-            self_broadcasted_stride = pad;
-        }
-
-        self_broadcasted_stride = self_broadcasted_stride
-            .iter()
-            .zip(strd_mask)
-            .map(|(strd, mask)| strd & mask)
-            .collect();
-
-        Self {
-            data: Arc::clone(&self.data),
-            stride: self_broadcasted_stride,
-            shape: target.clone(),
-            device: self.device(),
-            offset: self.offset.clone(),
-            grad: Arc::clone(&self.grad),
-            requires_grad: self.requires_grad,
-            // change so it doesn't need to be cloned
-            grad_fn: Arc::clone(&self.grad_fn),
-        }
-    }
-
-    pub fn broadcast_tensors(&self, other: &Self) -> (Self, Self) {
-        let mut new_shape: Vec<usize> = Vec::new();
-
-        for dim in self
-            .shape
-            .iter()
-            .rev()
-            .zip_longest(other.shape().iter().rev())
-        {
-            match dim {
-                itertools::EitherOrBoth::Both(self_dim, other_dim) => {
-                    new_shape.push(cmp::max(*self_dim, *other_dim));
-                }
-                itertools::EitherOrBoth::Left(self_dim) => {
-                    new_shape.push(*self_dim);
-                }
-                itertools::EitherOrBoth::Right(other_dim) => {
-                    new_shape.push(*other_dim);
-                }
-            }
-        }
-
-        new_shape.reverse();
-
-        assert!(
-            self.is_broadcastable(&new_shape) && other.is_broadcastable(&new_shape),
-            "Tensor of shape: {:?} and Tensor of shape: {:?} are not broadcastable.",
-            self.shape,
-            other.shape()
-        );
-
-        (
-            self.broadcast_to(&new_shape),
-            other.broadcast_to(&new_shape),
-        )
     }
 
     pub fn item(&self) -> Result<T, io::Error> {
@@ -388,28 +176,6 @@ where
             grad: Arc::clone(&self.grad),
             requires_grad: self.requires_grad,
             grad_fn: Arc::clone(&self.grad_fn),
-        }
-    }
-}
-
-impl<T> BackwardFn<T> for Tensor<T>
-where
-    T: Element,
-{
-    fn backward(&self, fwrd_result: Arc<Tensor<T>>) {
-        match *self.grad_fn.lock().unwrap() {
-            Some(ref fn_ref) => fn_ref.backward(Arc::clone(&fwrd_result)),
-            None => (),
-        }
-        self.update_grad(Arc::clone(&fwrd_result));
-    }
-
-    fn zero_grad(&self) {
-        let zero = Arc::new(Tensor::zeros_like(&self, None));
-        self.set_grad(Arc::clone(&zero));
-        match *self.grad_fn.lock().unwrap() {
-            Some(ref fn_ref) => fn_ref.zero_grad(),
-            None => (),
         }
     }
 }

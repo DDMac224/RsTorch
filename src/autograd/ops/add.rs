@@ -15,12 +15,14 @@ impl<T> BackwardFn<T> for AddBackward<T>
 where
     T: Element,
 {
-    fn backward(&self, fwrd_result: Arc<Tensor<T>>) {
-        todo!()
+    fn backward(&self, grad_output: Arc<Tensor<T>>) {
+        self.lhs.backward(Arc::clone(&self.lhs));
+        self.rhs.backward(Arc::clone(&self.rhs));
     }
 
     fn zero_grad(&self) {
-        todo!()
+        self.lhs.zero_grad();
+        self.rhs.zero_grad();
     }
 }
 
@@ -36,11 +38,8 @@ where
             rhs: Arc::new(rhs.clone()),
         });
 
-        if self.requires_grad() {
-            self.set_grad_fn(Arc::clone(&backwrd_fn));
-        }
-        if rhs.requires_grad() {
-            rhs.set_grad_fn(Arc::clone(&backwrd_fn));
+        if self.requires_grad() || rhs.requires_grad() {
+            ret.set_grad_fn(Arc::clone(&backwrd_fn));
         }
 
         ret
