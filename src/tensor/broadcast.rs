@@ -70,9 +70,8 @@ where
             shape: target.clone(),
             device: self.device(),
             offset: self.offset.clone(),
-            grad: Arc::clone(&self.grad),
+            grad_node: self.grad_node.clone(),
             requires_grad: self.requires_grad,
-            grad_fn: Arc::clone(&self.grad_fn),
         }
     }
 

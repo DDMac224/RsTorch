@@ -81,9 +81,8 @@ where
             shape: shape,
             device: self.device(),
             offset: self.offset,
-            grad: Arc::new(Mutex::new(None)),
+            grad_node: self.grad_node.clone(),
             requires_grad: self.requires_grad,
-            grad_fn: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -106,9 +105,8 @@ where
             shape: new_shape,
             device: self.device(),
             offset: self.offset,
-            grad: Arc::new(Mutex::new(None)),
+            grad_node: self.grad_node.clone(),
             requires_grad: self.requires_grad,
-            grad_fn: Arc::new(Mutex::new(None)),
         }
     }
 }

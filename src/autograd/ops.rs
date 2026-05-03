@@ -1,5 +1,5 @@
-mod add;
-mod matmul;
+mod binops;
+mod transforms;
 
 macro_rules! op_impl {
     ($Trait:ident, $method:ident; $fn:ident, $backward:ident) => {
@@ -55,7 +55,7 @@ macro_rules! op_impl {
         where
             T: Element,
         {
-            fn $method(&self, rhs: &Tensor<T>) -> Self {
+            pub fn $method(&self, rhs: &Tensor<T>) -> Self {
                 assert_eq!(
                     self.device(),
                     rhs.device(),

@@ -7,15 +7,15 @@ use std::{
     fmt::Debug,
     io,
     iter::repeat,
-    sync::{Arc, Mutex},
+    sync::{Arc, OnceLock},
 };
 
-use crate::autograd::BackwardFn;
+use crate::autograd::node::GradNode;
 
 pub mod broadcast;
 pub mod grad;
-pub mod inplace;
 pub mod ops;
+pub mod transform;
 
 pub trait Element: NumOps + Zero + One + Copy + PartialEq + Debug + 'static {}
 impl<T: NumOps + Zero + One + Copy + PartialEq + Debug + 'static> Element for T {}
@@ -35,8 +35,7 @@ pub struct Tensor<T: Element> {
     shape: Vec<usize>,
     device: Device,
     offset: usize,
-    grad: Arc<Mutex<Option<Arc<Tensor<T>>>>>,
-    pub(crate) grad_fn: Arc<Mutex<Option<Arc<dyn BackwardFn<T>>>>>,
+    pub(crate) grad_node: OnceLock<GradNode<T>>,
     requires_grad: bool,
 }
 
@@ -63,6 +62,8 @@ where
             strd *= dim;
         }
         stride.reverse();
+        let grad_node = OnceLock::new();
+        let _ = grad_node.set(GradNode::leaf());
 
         Self {
             data: Arc::new(data),
@@ -70,9 +71,8 @@ where
             shape: shape,
             device: device.unwrap_or(Device::CPU),
             offset: 0,
-            grad: Arc::new(Mutex::new(None)),
+            grad_node: grad_node,
             requires_grad: requires_grad.unwrap_or(false),
-            grad_fn: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -175,9 +175,8 @@ where
             shape: Vec::from(new_shape),
             device: self.device(),
             offset: new_offset,
-            grad: Arc::clone(&self.grad),
+            grad_node: OnceLock::new(),
             requires_grad: self.requires_grad,
-            grad_fn: Arc::clone(&self.grad_fn),
         }
     }
 }

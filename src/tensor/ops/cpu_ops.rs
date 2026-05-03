@@ -41,7 +41,7 @@ where
             ));
         }
 
-        Tensor::new(data, brdcsted_self.shape(), Some(Device::CPU), None)
+        Tensor::new_from_op(data, brdcsted_self.shape(), Device::CPU)
     }
 
     pub fn cpu_elemwise_uni(&self, op: fn(T) -> T) -> Self {
@@ -70,7 +70,7 @@ where
             }
         }
 
-        Tensor::new(data, self.shape(), Some(Device::CPU), None)
+        Tensor::new_from_op(data, self.shape(), Device::CPU)
     }
 
     fn matmul_matricies(&self, rhs: &Self) -> Self {
@@ -103,7 +103,7 @@ where
             }
         }
 
-        Tensor::new(data, new_dims, Some(self.device()), None)
+        Tensor::new_from_op(data, new_dims, self.device())
     }
 
     fn batched_matmul(&self, rhs: &Self) -> Self {
@@ -174,7 +174,7 @@ where
             new_data.extend_from_slice(elem_self.matmul_matricies(&elem_rhs).data.as_slice());
         }
 
-        Tensor::new(new_data, new_shape, Some(Device::CPU), None)
+        Tensor::new_from_op(new_data, new_shape, Device::CPU)
     }
 
     pub fn cpu_matmul(&self, rhs: &Self) -> Self {
