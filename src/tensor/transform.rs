@@ -1,8 +1,6 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use crate::tensor::{
-    Element, Tensor, TensorInner, cpu::CpuData, data::TensorData, metadata::TensorMetadata,
-};
+use crate::tensor::{Element, Tensor, TensorInner, metadata::TensorMetadata};
 
 impl<T> Tensor<T>
 where

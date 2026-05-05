@@ -23,9 +23,11 @@ where
         }))
     }
 
-    pub fn grad(&self) -> Tensor<T> {
-        //self.grad_node.get().unwrap().grad.lock();
-        todo!()
+    pub fn grad(&self) -> Option<Tensor<T>> {
+        self.grad_node
+            .get()
+            .map(|node| node.grad.lock().unwrap().clone())
+            .flatten()
     }
 
     pub fn requires_grad(&self) -> bool {
@@ -35,8 +37,10 @@ where
     pub fn backward(&self) {
         assert!(self.requires_grad, "Tensor does not require gradient.");
 
+        let seed = Tensor::ones(self.shape(), Some(self.device()), None);
+
         if let Some(node) = self.grad_node.get() {
-            node.accumulate_grad(self);
+            node.backward(seed);
         } else {
             panic!("Tensor does not have grad_node")
         }

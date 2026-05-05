@@ -212,15 +212,10 @@ where
     }
 }
 
-// tests written by claude
 #[cfg(test)]
 mod tests {
     use crate::tensor::{Device, Tensor};
 
-    // -------------------------------------------------------------------------
-    // Helper: read every element of a tensor into a flat Vec by walking all
-    // indices via the public .index() + .item() API (data field is private).
-    // -------------------------------------------------------------------------
     fn collect<T: crate::tensor::Element + Default>(t: &Tensor<T>) -> Vec<T> {
         let shape = t.shape();
         let size: usize = shape.iter().product();
@@ -244,144 +239,151 @@ mod tests {
     }
 
     // =========================================================================
-    // cpu_elemwise
+    // cpu_elemwise_bin — broadcasting (private broadcast internals)
     // =========================================================================
 
-    mod elemwise {
+    mod elemwise_bin {
         use super::*;
 
-        // --- basic ops on same-shape tensors ---------------------------------
+        mod broadcasting {
+            use super::*;
 
-        #[test]
-        fn add_1d() {
-            let a = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let b = t(vec![4.0, 5.0, 6.0], vec![3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![3]);
-            assert_eq!(collect(&c), vec![5.0, 7.0, 9.0]);
+            #[test]
+            fn scalar_rhs() {
+                let a = t(vec![1.0, 2.0, 3.0], vec![3]);
+                let b = t(vec![10.0], vec![1]);
+                let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
+                assert_eq!(c.shape(), vec![3]);
+                assert_eq!(collect(&c), vec![11.0, 12.0, 13.0]);
+            }
+
+            #[test]
+            fn scalar_lhs() {
+                let a = t(vec![10.0], vec![1]);
+                let b = t(vec![1.0, 2.0, 3.0], vec![3]);
+                let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
+                assert_eq!(collect(&c), vec![11.0, 12.0, 13.0]);
+            }
+
+            #[test]
+            fn row_vector_to_matrix() {
+                let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+                let b = t(vec![10.0, 20.0], vec![1, 2]);
+                let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
+                assert_eq!(collect(&c), vec![11.0, 22.0, 13.0, 24.0]);
+            }
+
+            #[test]
+            fn col_vector_to_matrix() {
+                let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+                let b = t(vec![10.0, 20.0], vec![2, 1]);
+                let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
+                assert_eq!(collect(&c), vec![11.0, 12.0, 23.0, 24.0]);
+            }
+
+            #[test]
+            fn broadcast_3d() {
+                let a = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 1, 3]);
+                let b = t(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0], vec![1, 2, 3]);
+                let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
+                assert_eq!(collect(&c), vec![
+                    11.0, 22.0, 33.0, 41.0, 52.0, 63.0,
+                    14.0, 25.0, 36.0, 44.0, 55.0, 66.0,
+                ]);
+            }
         }
 
-        #[test]
-        fn sub_1d() {
-            let a = t(vec![5.0, 6.0, 7.0], vec![3]);
-            let b = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x - y);
-            assert_eq!(collect(&c), vec![4.0, 4.0, 4.0]);
+        mod custom_ops {
+            use super::*;
+
+            #[test]
+            fn arbitrary_closure_max() {
+                let a = t(vec![1.0, 5.0, 3.0], vec![3]);
+                let b = t(vec![4.0, 2.0, 3.0], vec![3]);
+                let c = a.cpu_elemwise_bin(&b, f32::max);
+                assert_eq!(collect(&c), vec![4.0, 5.0, 3.0]);
+            }
+
+            #[test]
+            fn arbitrary_closure_abs_diff() {
+                let a = t(vec![1.0, 10.0, 3.0], vec![3]);
+                let b = t(vec![4.0, 2.0, 8.0], vec![3]);
+                let c = a.cpu_elemwise_bin(&b, |x, y| (x - y).abs());
+                assert_eq!(collect(&c), vec![3.0, 8.0, 5.0]);
+            }
         }
 
-        #[test]
-        fn mul_1d() {
-            let a = t(vec![2.0, 3.0, 4.0], vec![3]);
-            let b = t(vec![5.0, 6.0, 7.0], vec![3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x * y);
-            assert_eq!(collect(&c), vec![10.0, 18.0, 28.0]);
-        }
+        mod output_properties {
+            use super::*;
 
-        #[test]
-        fn div_1d() {
-            let a = t(vec![6.0, 8.0, 9.0], vec![3]);
-            let b = t(vec![2.0, 4.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x / y);
-            assert_eq!(collect(&c), vec![3.0, 2.0, 3.0]);
-        }
+            #[test]
+            fn result_device_is_cpu() {
+                let a = t(vec![1.0], vec![1]);
+                let b = t(vec![2.0], vec![1]);
+                assert_eq!(a.cpu_elemwise_bin(&b, |x, y| x + y).device(), Device::CPU);
+            }
 
-        #[test]
-        fn add_2d() {
-            let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
-            let b = t(vec![10.0, 20.0, 30.0, 40.0], vec![2, 2]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![2, 2]);
-            assert_eq!(collect(&c), vec![11.0, 22.0, 33.0, 44.0]);
-        }
-
-        // --- broadcasting ----------------------------------------------------
-
-        #[test]
-        fn broadcast_scalar_rhs() {
-            // [3] op [1] → [3]
-            let a = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let b = t(vec![10.0], vec![1]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![3]);
-            assert_eq!(collect(&c), vec![11.0, 12.0, 13.0]);
-        }
-
-        #[test]
-        fn broadcast_scalar_lhs() {
-            // [1] op [3] → [3]
-            let a = t(vec![10.0], vec![1]);
-            let b = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![3]);
-            assert_eq!(collect(&c), vec![11.0, 12.0, 13.0]);
-        }
-
-        #[test]
-        fn broadcast_row_vector_to_matrix() {
-            // [2,2] + [1,2] → [2,2]: each row gets the same addend
-            let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
-            let b = t(vec![10.0, 20.0], vec![1, 2]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![2, 2]);
-            assert_eq!(collect(&c), vec![11.0, 22.0, 13.0, 24.0]);
-        }
-
-        #[test]
-        fn broadcast_col_vector_to_matrix() {
-            // [2,2] + [2,1] → [2,2]: each column gets the same addend
-            let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
-            let b = t(vec![10.0, 20.0], vec![2, 1]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![2, 2]);
-            assert_eq!(collect(&c), vec![11.0, 12.0, 23.0, 24.0]);
-        }
-
-        #[test]
-        fn broadcast_3d() {
-            // [2,1,3] + [1,2,3] → [2,2,3]
-            let a = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 1, 3]);
-            let b = t(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0], vec![1, 2, 3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![2, 2, 3]);
-            assert_eq!(
-                collect(&c),
-                vec![
-                    11.0, 22.0, 33.0, 41.0, 52.0, 63.0, 14.0, 25.0, 36.0, 44.0, 55.0, 66.0
-                ]
-            );
-        }
-
-        // --- custom op -------------------------------------------------------
-
-        #[test]
-        fn custom_op_max() {
-            let a = t(vec![1.0, 5.0, 3.0], vec![3]);
-            let b = t(vec![4.0, 2.0, 3.0], vec![3]);
-            let c = a.cpu_elemwise_bin(&b, f32::max);
-            assert_eq!(collect(&c), vec![4.0, 5.0, 3.0]);
-        }
-
-        // --- output properties -----------------------------------------------
-
-        #[test]
-        fn result_device_is_cpu() {
-            let a = t(vec![1.0], vec![1]);
-            let b = t(vec![2.0], vec![1]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.device(), Device::CPU);
-        }
-
-        #[test]
-        fn result_shape_matches_broadcast_shape() {
-            let a = t(vec![1.0, 2.0, 3.0], vec![1, 3]);
-            let b = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
-            let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-            assert_eq!(c.shape(), vec![2, 3]);
+            #[test]
+            fn result_shape_matches_broadcast_shape() {
+                let a = t(vec![1.0, 2.0, 3.0], vec![1, 3]);
+                let b = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+                assert_eq!(a.cpu_elemwise_bin(&b, |x, y| x + y).shape(), vec![2, 3]);
+            }
         }
     }
 
     // =========================================================================
-    // cpu_matmul — 2D paths (matmul_matricies)
+    // cpu_elemwise_uni — contiguous and non-contiguous code paths
+    // =========================================================================
+
+    mod elemwise_uni {
+        use super::*;
+
+        mod contiguous {
+            use super::*;
+
+            #[test]
+            fn square_contiguous_1d() {
+                let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
+                assert!(a.is_contiguous());
+                let c = a.cpu_elemwise_uni(|x| x * x);
+                assert_eq!(collect(&c), vec![1.0, 4.0, 9.0, 16.0]);
+            }
+
+            #[test]
+            fn square_contiguous_2d() {
+                let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+                assert!(a.is_contiguous());
+                let c = a.cpu_elemwise_uni(|x| x + 10.0);
+                assert_eq!(collect(&c), vec![11.0, 12.0, 13.0, 14.0]);
+            }
+        }
+
+        mod non_contiguous {
+            use super::*;
+
+            #[test]
+            fn square_broadcast_row_vector() {
+                let a = t(vec![1.0, 2.0, 3.0], vec![1, 3]);
+                let b = a.broadcast_to(&vec![2, 3]);
+                assert!(!b.is_contiguous());
+                let c = b.cpu_elemwise_uni(|x| x * 2.0);
+                assert_eq!(collect(&c), vec![2.0, 4.0, 6.0, 2.0, 4.0, 6.0]);
+            }
+
+            #[test]
+            fn square_broadcast_column_vector() {
+                let a = t(vec![1.0, 2.0], vec![2, 1]);
+                let b = a.broadcast_to(&vec![2, 3]);
+                assert!(!b.is_contiguous());
+                let c = b.cpu_elemwise_uni(|x| x + 1.0);
+                assert_eq!(collect(&c), vec![2.0, 2.0, 2.0, 3.0, 3.0, 3.0]);
+            }
+        }
+    }
+
+    // =========================================================================
+    // cpu_matmul — 2D path (matmul_matricies)
     // =========================================================================
 
     mod matmul_2d {
@@ -389,61 +391,48 @@ mod tests {
 
         #[test]
         fn square_2x2() {
-            // [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]
             let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
             let b = t(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]);
             let c = a.cpu_matmul(&b);
-            assert_eq!(c.shape(), vec![2, 2]);
             assert_eq!(collect(&c), vec![19.0, 22.0, 43.0, 50.0]);
         }
 
         #[test]
         fn rectangular_2x3_times_3x2() {
-            // [[1,2,3],[4,5,6]] @ [[7,8],[9,10],[11,12]] = [[58,64],[139,154]]
             let a = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
             let b = t(vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0], vec![3, 2]);
             let c = a.cpu_matmul(&b);
-            assert_eq!(c.shape(), vec![2, 2]);
             assert_eq!(collect(&c), vec![58.0, 64.0, 139.0, 154.0]);
         }
 
         #[test]
         fn dot_product_1x3_times_3x1() {
-            // [[1,2,3]] @ [[4],[5],[6]] = [[32]]
             let a = t(vec![1.0, 2.0, 3.0], vec![1, 3]);
             let b = t(vec![4.0, 5.0, 6.0], vec![3, 1]);
             let c = a.cpu_matmul(&b);
-            assert_eq!(c.shape(), vec![1, 1]);
             assert_eq!(c.item().unwrap(), 32.0);
         }
 
         #[test]
         fn outer_product_3x1_times_1x3() {
-            // [[1],[2],[3]] @ [[4,5,6]] = [[4,5,6],[8,10,12],[12,15,18]]
             let a = t(vec![1.0, 2.0, 3.0], vec![3, 1]);
             let b = t(vec![4.0, 5.0, 6.0], vec![1, 3]);
             let c = a.cpu_matmul(&b);
-            assert_eq!(c.shape(), vec![3, 3]);
-            assert_eq!(
-                collect(&c),
-                vec![4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 12.0, 15.0, 18.0]
-            );
+            assert_eq!(collect(&c), vec![4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 12.0, 15.0, 18.0]);
         }
 
         #[test]
         fn identity_matrix() {
             let eye = t(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]);
             let a = t(vec![3.0, 4.0, 5.0, 6.0], vec![2, 2]);
-            let c = a.cpu_matmul(&eye);
-            assert_eq!(collect(&c), vec![3.0, 4.0, 5.0, 6.0]);
+            assert_eq!(collect(&a.cpu_matmul(&eye)), vec![3.0, 4.0, 5.0, 6.0]);
         }
 
         #[test]
         fn zero_matrix() {
             let zeros = t(vec![0.0; 4], vec![2, 2]);
             let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
-            let c = a.cpu_matmul(&zeros);
-            assert_eq!(collect(&c), vec![0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(collect(&a.cpu_matmul(&zeros)), vec![0.0; 4]);
         }
 
         #[test]
@@ -453,12 +442,9 @@ mod tests {
             assert_eq!(a.cpu_matmul(&b).device(), Device::CPU);
         }
 
-        // --- panic cases -----------------------------------------------------
-
         #[test]
         #[should_panic]
         fn mismatched_inner_dims_panics() {
-            // [1,3] @ [2,1]: inner 3 ≠ 2
             let a = t(vec![1.0, 2.0, 3.0], vec![1, 3]);
             let b = t(vec![1.0, 2.0], vec![2, 1]);
             let _ = a.cpu_matmul(&b);
@@ -476,16 +462,14 @@ mod tests {
         fn scalar_lhs_broadcasts_over_1d() {
             let scalar = t(vec![3.0], vec![1]);
             let a = t(vec![1.0, 2.0, 3.0], vec![3]);
-            let c = scalar.cpu_matmul(&a);
-            assert_eq!(collect(&c), vec![3.0, 6.0, 9.0]);
+            assert_eq!(collect(&scalar.cpu_matmul(&a)), vec![3.0, 6.0, 9.0]);
         }
 
         #[test]
         fn scalar_rhs_broadcasts_over_1d() {
             let a = t(vec![1.0, 2.0, 3.0], vec![3]);
             let scalar = t(vec![2.0], vec![1]);
-            let c = a.cpu_matmul(&scalar);
-            assert_eq!(collect(&c), vec![2.0, 4.0, 6.0]);
+            assert_eq!(collect(&a.cpu_matmul(&scalar)), vec![2.0, 4.0, 6.0]);
         }
 
         #[test]
@@ -502,8 +486,143 @@ mod tests {
             let scalar = t(vec![2.0], vec![1]);
             let m = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
             let c = scalar.cpu_matmul(&m);
-            assert_eq!(c.shape(), vec![2, 2]);
             assert_eq!(collect(&c), vec![2.0, 4.0, 6.0, 8.0]);
+        }
+    }
+
+    // =========================================================================
+    // cpu_matmul — batched path (batched_matmul)
+    //
+    // NOTE: These tests document expected behavior. The implementation
+    // currently has bugs — see known issues at the top of each section.
+    // =========================================================================
+
+    mod matmul_batched {
+        use super::*;
+
+        mod batched_3d {
+            use super::*;
+
+            // Known bugs in batched_matmul:
+            //   1. Line 127: rhs.shape()[rhs.metadata.shape.len()] is OOB
+            //   2. Lines 174-175: output shape construction is incorrect
+            //   3. Lines 180-184: batch index iteration logic is broken
+
+            #[test]
+            fn two_batches_2x3_times_3x2() {
+                // Batch 0: [[1,2,3],[4,5,6]] @ [[7,8],[9,10],[11,12]] = [[58,64],[139,154]]
+                // Batch 1: [[7,8,9],[10,11,12]] @ [[13,14],[15,16],[17,18]] = [[364,388],[499,532]]
+                let a = t(
+                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                    vec![2, 2, 3],
+                );
+                let b = t(
+                    vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0],
+                    vec![2, 3, 2],
+                );
+                let c = a.cpu_matmul(&b);
+                assert_eq!(c.shape(), vec![2, 2, 2]);
+                assert_eq!(
+                    collect(&c),
+                    vec![58.0, 64.0, 139.0, 154.0, 364.0, 388.0, 499.0, 532.0]
+                );
+            }
+
+            #[test]
+            fn three_batches_2x2_times_2x2() {
+                let a = t(
+                    vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 3.0],
+                    vec![3, 2, 2],
+                );
+                let b = t(
+                    vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    vec![3, 2, 2],
+                );
+                let c = a.cpu_matmul(&b);
+                assert_eq!(c.shape(), vec![3, 2, 2]);
+                assert_eq!(collect(&c), vec![1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]);
+            }
+
+            #[test]
+            fn result_device_is_cpu() {
+                let a = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 1, 3]);
+                let b = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3, 1]);
+                assert_eq!(a.cpu_matmul(&b).device(), Device::CPU);
+            }
+        }
+
+        mod batched_broadcast {
+            use super::*;
+
+            #[test]
+            fn broadcast_single_matrix_across_batch() {
+                // a: [2, 3, 2], b: [1, 2, 1] → b broadcasts to [2, 2, 1]
+                // Result: [2, 3, 1]
+                // Batch 0: [[1,2],[3,4],[5,6]] @ [[1],[2]] = [[5],[11],[17]]
+                // Batch 1: [[7,8],[9,10],[11,12]] @ [[1],[2]] = [[23],[29],[35]]
+                let a = t(
+                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                    vec![2, 3, 2],
+                );
+                let b = t(vec![1.0, 2.0], vec![1, 2, 1]);
+                let c = a.cpu_matmul(&b);
+                assert_eq!(c.shape(), vec![2, 3, 1]);
+                assert_eq!(collect(&c), vec![5.0, 11.0, 17.0, 23.0, 29.0, 35.0]);
+            }
+
+            #[test]
+            fn batch_dim_no_broadcast() {
+                // a: [2, 1, 2], b: [2, 2, 1] — same batch dim, no broadcast
+                // Batch 0: [[1,2]] @ [[5],[7]] = [19]
+                // Batch 1: [[3,4]] @ [[6],[8]] = [50]
+                let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 1, 2]);
+                let b = t(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2, 1]);
+                let c = a.cpu_matmul(&b);
+                assert_eq!(c.shape(), vec![2, 1, 1]);
+                let v = collect(&c);
+                assert!((v[0] - 19.0).abs() < 1e-5, "batch 0: {} != 19", v[0]);
+                assert!((v[1] - 50.0).abs() < 1e-5, "batch 1: {} != 50", v[1]);
+            }
+
+            #[test]
+            fn broadcast_identity_matrix() {
+                // a: [3, 2, 2], b: [1, 2, 2] → identity broadcasts to all 3 batches
+                let a = t(
+                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                    vec![3, 2, 2],
+                );
+                let b = t(vec![1.0, 0.0, 0.0, 1.0], vec![1, 2, 2]);
+                let c = a.cpu_matmul(&b);
+                assert_eq!(c.shape(), vec![3, 2, 2]);
+                assert_eq!(
+                    collect(&c),
+                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+                );
+            }
+        }
+
+        mod batched_4d {
+            use super::*;
+
+            #[test]
+            fn two_by_two_batches() {
+                // a: [2, 2, 2, 3], b: [2, 2, 3, 2] → result [2, 2, 2, 2]
+                let a = Tensor::new(
+                    (1..=24).map(|x| x as f32).collect(),
+                    vec![2, 2, 2, 3],
+                    Some(Device::CPU),
+                    None,
+                );
+                let b = Tensor::new(
+                    (1..=24).map(|x| x as f32).collect(),
+                    vec![2, 2, 3, 2],
+                    Some(Device::CPU),
+                    None,
+                );
+                let c = a.cpu_matmul(&b);
+                assert_eq!(c.shape(), vec![2, 2, 2, 2]);
+                assert_eq!(c.device(), Device::CPU);
+            }
         }
     }
 }

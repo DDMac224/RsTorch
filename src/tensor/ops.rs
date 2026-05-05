@@ -86,5 +86,3 @@ macro_rules! tensor_op_impl {
 
 tensor_op_impl!(forward_matmul; cpu_matmul, cuda_matmul);
 
-#[cfg(test)]
-mod tests {}

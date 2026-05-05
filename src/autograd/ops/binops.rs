@@ -3,7 +3,7 @@ use crate::{
     tensor::{Element, Tensor},
 };
 
-use std::{ops::Add, sync::Arc};
+use std::ops::{Add, Sub};
 
 #[derive(Debug, Clone)]
 pub struct AddBackward<T: Element> {
@@ -16,8 +16,16 @@ where
     T: Element,
 {
     fn backward(&self, grad_output: Tensor<T>) {
-        self.lhs.grad_node.get().unwrap().backward(self.lhs.clone());
-        self.rhs.grad_node.get().unwrap().backward(self.rhs.clone());
+        self.lhs
+            .grad_node
+            .get()
+            .unwrap()
+            .backward(grad_output.clone());
+        self.rhs
+            .grad_node
+            .get()
+            .unwrap()
+            .backward(grad_output.clone());
     }
 }
 
@@ -42,6 +50,51 @@ where
 }
 
 op_impl!(Add, add; add_grad, AddBackward);
+
+#[derive(Debug, Clone)]
+pub struct SubBackward<T: Element> {
+    lhs: Tensor<T>,
+    rhs: Tensor<T>,
+}
+
+impl<T> BackwardFn<T> for SubBackward<T>
+where
+    T: Element,
+{
+    fn backward(&self, grad_output: Tensor<T>) {
+        self.lhs
+            .grad_node
+            .get()
+            .unwrap()
+            .backward(grad_output.clone());
+        self.rhs.grad_node.get().unwrap().backward(
+            Tensor::zeros_like(&grad_output.clone(), Some(false))
+                .elemwise_sub(&grad_output.clone()),
+        );
+    }
+}
+
+impl<T> Tensor<T>
+where
+    T: Element,
+{
+    fn sub_grad(&self, rhs: &Self) -> Self {
+        let ret = self.elemwise_sub(rhs);
+
+        let backwrd_fn = GradNode::new(Box::new(SubBackward {
+            lhs: self.clone(),
+            rhs: rhs.clone(),
+        }));
+
+        if self.requires_grad() || rhs.requires_grad() {
+            let _ = ret.grad_node.set(backwrd_fn);
+        }
+
+        ret
+    }
+}
+
+op_impl!(Sub, sub; sub_grad, SubBackward);
 
 #[derive(Debug, Clone)]
 pub struct MatMulBackward<T: Element> {

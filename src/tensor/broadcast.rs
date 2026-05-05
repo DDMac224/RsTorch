@@ -1,9 +1,5 @@
-use std::{
-    cmp,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
-use itertools::Itertools;
 
 use crate::tensor::{Element, Tensor, TensorInner};
 
@@ -31,7 +27,7 @@ where
                 requires_grad: self.requires_grad,
             })),
             Self(Arc::new(TensorInner {
-                data: self.data.clone(),
+                data: other.data.clone(),
                 metadata: new_metadata.1,
                 grad_node: OnceLock::new(),
                 requires_grad: self.requires_grad,
