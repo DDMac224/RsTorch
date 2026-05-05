@@ -7,7 +7,7 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct GradNode<T: Element> {
-    pub(crate) grad: Mutex<Option<Arc<Tensor<T>>>>,
+    pub(crate) grad: Mutex<Option<Tensor<T>>>,
     pub(crate) grad_fn: Option<Box<dyn BackwardFn<T>>>,
 }
 
@@ -35,27 +35,32 @@ impl<T: Element> GradNode<T> {
         }
     }
 
-    pub fn set_grad(&self, grad: Arc<Tensor<T>>) {
+    pub fn set_grad(&self, grad: Tensor<T>) {
         *self.grad.lock().unwrap() = Some(grad.clone());
     }
 
-    pub fn update_grad(&self, grad: Arc<Tensor<T>>) {
+    pub fn update_grad(&self, grad: Tensor<T>) {
         let mut grad_mut = self.grad.lock().unwrap();
 
         if let Some(ref mut mut_t) = *grad_mut {
-            *mut_t = Arc::new(mut_t.elemwise_add(&grad));
+            *mut_t = mut_t.elemwise_add(&grad);
         } else {
             *grad_mut = Some(grad.clone());
         }
     }
 
-    pub fn zero_grad(&self) {
-        todo!()
+    pub fn accumulate_grad(&self, seed: &Tensor<T>) {
+        match self.grad_fn {
+            Some(ref fun) => fun.backward(seed.clone()),
+            None => panic!("Leaf node cannot call backward()"),
+        }
     }
 
-    pub fn backward(&self) {
-        todo!()
+    pub fn backward(&self, grad_output: Tensor<T>) {
+        if let Some(ref backfn) = self.grad_fn {
+            backfn.backward(grad_output);
+        } else {
+            self.update_grad(grad_output);
+        }
     }
-
-    pub fn call_backwardfn(&self, grad_output: Arc<Tensor<T>>) {}
 }

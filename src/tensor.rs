@@ -7,13 +7,21 @@ use std::{
     fmt::Debug,
     io,
     iter::repeat,
-    sync::{Arc, OnceLock},
+    ops::{Deref, DerefMut},
+    sync::{Arc, OnceLock, RwLock},
 };
 
-use crate::autograd::node::GradNode;
+use crate::{
+    autograd::node::GradNode,
+    tensor::{data::TensorData, metadata::TensorMetadata},
+};
 
 pub mod broadcast;
+pub mod cpu;
+pub mod cuda;
+pub mod data;
 pub mod grad;
+pub mod metadata;
 pub mod ops;
 pub mod transform;
 
@@ -29,14 +37,22 @@ pub enum Device {
 }
 
 #[derive(Debug, Clone)]
-pub struct Tensor<T: Element> {
-    data: Arc<Vec<T>>,
-    stride: Vec<usize>,
-    shape: Vec<usize>,
-    device: Device,
-    offset: usize,
+pub struct Tensor<T: Element>(Arc<TensorInner<T>>);
+
+#[derive(Debug, Clone)]
+pub struct TensorInner<T: Element> {
+    data: Arc<RwLock<TensorData<T>>>,
+    metadata: TensorMetadata,
     pub(crate) grad_node: OnceLock<GradNode<T>>,
     requires_grad: bool,
+}
+
+impl<T: Element> Deref for Tensor<T> {
+    type Target = TensorInner<T>;
+
+    fn deref(&self) -> &TensorInner<T> {
+        &self.0
+    }
 }
 
 impl<T> Tensor<T>
@@ -55,25 +71,43 @@ where
             "Length of data does not match shape"
         );
 
-        let mut stride: Vec<usize> = Vec::new();
-        let mut strd = 1;
-        for dim in shape.iter().rev() {
-            stride.push(strd);
-            strd *= dim;
-        }
-        stride.reverse();
         let grad_node = OnceLock::new();
         let _ = grad_node.set(GradNode::leaf());
 
-        Self {
-            data: Arc::new(data),
-            stride,
-            shape: shape,
-            device: device.unwrap_or(Device::CPU),
-            offset: 0,
+        Self(Arc::new(TensorInner {
+            data: Arc::new(RwLock::new(TensorData::new(
+                data,
+                device.unwrap_or(Device::CPU),
+            ))),
             grad_node: grad_node,
             requires_grad: requires_grad.unwrap_or(false),
+            metadata: TensorMetadata::new(shape),
+        }))
+    }
+
+    pub fn from_parts(
+        data: TensorData<T>,
+        metadata: TensorMetadata,
+        grad_node: Option<GradNode<T>>,
+        requires_grad: bool,
+    ) -> Self {
+        assert_eq!(
+            data.len(),
+            metadata.size(),
+            "Length of data does not match shape"
+        );
+
+        let set_node = OnceLock::new();
+        if let Some(node) = grad_node {
+            set_node.set(node);
         }
+
+        Self(Arc::new(TensorInner {
+            data: Arc::new(RwLock::new(data)),
+            metadata,
+            grad_node: set_node,
+            requires_grad,
+        }))
     }
 
     pub fn new_rand(
@@ -122,62 +156,48 @@ where
     }
 
     pub fn shape(&self) -> Vec<usize> {
-        self.shape.clone()
+        self.metadata.shape.clone()
     }
 
     pub fn stride(&self) -> Vec<usize> {
-        self.stride.clone()
+        self.metadata.stride.clone()
+    }
+
+    pub fn size(&self) -> usize {
+        self.metadata.size()
+    }
+
+    pub fn rank(&self) -> usize {
+        self.metadata.rank()
     }
 
     pub fn device(&self) -> Device {
-        self.device.clone()
-    }
-
-    pub fn is_scalar(&self) -> bool {
-        self.shape.iter().product::<usize>() == 1
+        match *self.data.read().unwrap() {
+            TensorData::CpuData(_) => return Device::CPU,
+            TensorData::CudaData => return Device::Cuda,
+        }
     }
 
     pub fn item(&self) -> Result<T, io::Error> {
-        if !self.is_scalar() {
+        if !self.metadata.is_scalar() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "A Tensor with multiple elements cannot return a scalar.",
             ));
         }
 
-        Ok(self.data[self.offset])
+        Ok(self.data.read().unwrap().item(&self.metadata))
     }
 
     pub fn index<I: AsRef<[usize]>>(&self, idx: I) -> Self {
         let index = idx.as_ref();
 
-        assert!(
-            index.len() <= self.shape().len(),
-            "Indexing too many dimensions."
-        );
-        assert!(
-            !self.shape.iter().zip(index.iter()).any(|(dim, i)| i >= dim),
-            "Index out of bounds."
-        );
-
-        let new_offset: usize = self
-            .stride
-            .iter()
-            .zip(index.iter())
-            .fold(0, |acc, (strd, i)| acc + strd * i)
-            + self.offset;
-        let new_shape = &self.shape()[index.len()..];
-        let new_stride = &self.stride()[index.len()..];
-
-        Self {
+        Self(Arc::new(TensorInner {
             data: Arc::clone(&self.data),
-            stride: Vec::from(new_stride),
-            shape: Vec::from(new_shape),
-            device: self.device(),
-            offset: new_offset,
+            metadata: self.metadata.index(index),
             grad_node: OnceLock::new(),
             requires_grad: self.requires_grad,
-        }
+        }))
     }
 }
 
@@ -269,7 +289,7 @@ mod tests {
         let t = Tensor::new(data, vec![2, 3], None, None);
         let mut row = t.index([1]); // offset is now 3
         row.contiguous();
-        assert_eq!(row.offset, 0);
+        assert_eq!(row.metadata.offset, 0);
     }
 
     #[test]

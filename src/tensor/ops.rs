@@ -1,8 +1,5 @@
 use crate::tensor::{Device, Element, FloatElement, Tensor};
 
-mod cpu_ops;
-mod cuda_ops;
-
 macro_rules! elemwise_bin_op_impl {
     ($method:ident; $cpu_fn:ident, $cuda_fn:ident, $scalar_op:ident) => {
         impl<T> Tensor<T>

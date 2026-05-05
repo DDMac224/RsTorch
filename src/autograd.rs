@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use dyn_clone::DynClone;
 
@@ -14,8 +11,7 @@ pub trait BackwardFn<T>: Debug + DynClone
 where
     T: Element,
 {
-    fn backward(&self, grad_output: Arc<Tensor<T>>);
-    fn zero_grad(&self);
+    fn backward(&self, grad_output: Tensor<T>);
 }
 
 dyn_clone::clone_trait_object!(<T> BackwardFn<T> where T:Element);

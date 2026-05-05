@@ -17,11 +17,7 @@ impl<T> BackwardFn<T> for IndexFn<T>
 where
     T: Element,
 {
-    fn backward(&self, grad_output: Arc<Tensor<T>>) {
-        todo!()
-    }
-
-    fn zero_grad(&self) {
+    fn backward(&self, grad_output: Tensor<T>) {
         todo!()
     }
 }

@@ -11,62 +11,68 @@ where
     pub fn cpu_elemwise_bin(&self, rhs: &Self, op: fn(T, T) -> T) -> Self {
         let mut brdcsted_self = self.clone();
         let mut brdcsted_rhs = rhs.clone();
-        if self.shape != rhs.shape {
+        if self.metadata.shape != rhs.metadata.shape {
             (brdcsted_self, brdcsted_rhs) = self.broadcast_tensors(rhs);
         }
 
-        let size: usize = brdcsted_self.shape.iter().product();
+        let size: usize = brdcsted_self.metadata.shape.iter().product();
 
         let mut data: Vec<T> = Vec::new();
 
+        let self_data_locked = self.data.read().unwrap();
+        let rhs_data_locked = rhs.data.read().unwrap();
+
+        let self_cpu_data = self_data_locked.expect_cpu();
+        let rhs_cpu_data = rhs_data_locked.expect_cpu();
+
         for i in 0..size {
-            let idx = brdcsted_self.shape.iter().rev().scan(i, |acc, e| {
+            let idx = brdcsted_self.metadata.shape.iter().rev().scan(i, |acc, e| {
                 let temp = *acc;
                 *acc /= *e;
                 Some(temp % e)
             });
-            let elem_self = brdcsted_self.offset
+            let elem_self = brdcsted_self.metadata.offset
                 + idx
                     .clone()
-                    .zip(brdcsted_self.stride.iter().rev())
+                    .zip(brdcsted_self.metadata.stride.iter().rev())
                     .fold(0, |acc, (idx, strd)| acc + (idx * strd));
-            let elem_rhs = brdcsted_rhs.offset
+            let elem_rhs = brdcsted_rhs.metadata.offset
                 + idx
-                    .zip(brdcsted_rhs.stride.iter().rev())
+                    .zip(brdcsted_rhs.metadata.stride.iter().rev())
                     .fold(0, |acc, (idx, strd)| acc + (idx * strd));
 
-            data.push(op(
-                brdcsted_self.data[elem_self],
-                brdcsted_rhs.data[elem_rhs],
-            ));
+            data.push(op(self_cpu_data[elem_self], rhs_cpu_data[elem_rhs]));
         }
 
         Tensor::new_from_op(data, brdcsted_self.shape(), Device::CPU)
     }
 
     pub fn cpu_elemwise_uni(&self, op: fn(T) -> T) -> Self {
-        let size: usize = self.shape.iter().product();
+        let size = self.size();
 
         let mut data: Vec<T> = Vec::new();
 
+        let self_data_locked = self.data.read().unwrap();
+        let self_cpu_data = self_data_locked.expect_cpu();
+
         if self.is_contiguous() {
             for i in 0..size {
-                data.push(op(self.data[self.offset + i]));
+                data.push(op(self_cpu_data[self.metadata.offset + i]));
             }
         } else {
             for i in 0..size {
-                let idx = self.shape.iter().rev().scan(i, |acc, e| {
+                let idx = self.metadata.shape.iter().rev().scan(i, |acc, e| {
                     let temp = *acc;
                     *acc /= *e;
                     Some(temp % e)
                 });
-                let elem_self = self.offset
+                let elem_self = self.metadata.offset
                     + idx
                         .clone()
-                        .zip(self.stride.iter().rev())
+                        .zip(self.metadata.stride.iter().rev())
                         .fold(0, |acc, (idx, strd)| acc + (idx * strd));
 
-                data.push(op(self.data[elem_self]));
+                data.push(op(self_cpu_data[elem_self]));
             }
         }
 
@@ -75,25 +81,34 @@ where
 
     fn matmul_matricies(&self, rhs: &Self) -> Self {
         assert!(
-            self.shape.len() == rhs.shape().len() && self.shape.len() == 2,
+            self.rank() == rhs.rank() && self.rank() == 2,
             "Matrix matmul can only have two dimensions"
         );
         assert_eq!(
-            self.shape[1], rhs.shape[0],
+            self.metadata.shape[1], rhs.metadata.shape[0],
             "Columns of self and rows of rhs must match"
         );
 
-        let new_dims = vec![self.shape[0], rhs.shape()[1]];
+        let new_dims = vec![self.metadata.shape[0], rhs.shape()[1]];
 
         let mut data: Vec<T> = Vec::new();
 
-        for i in 0..self.shape[0] {
-            for j in 0..rhs.shape[1] {
-                let sum = (0..self.shape[1])
+        let self_data_locked = self.data.read().unwrap();
+        let rhs_data_locked = rhs.data.read().unwrap();
+
+        let self_cpu_data = self_data_locked.expect_cpu();
+        let rhs_cpu_data = rhs_data_locked.expect_cpu();
+
+        for i in 0..self.metadata.shape[0] {
+            for j in 0..rhs.metadata.shape[1] {
+                let sum = (0..self.metadata.shape[1])
                     .map(|k| {
-                        let self_elem =
-                            self.data[self.offset + i * self.stride[0] + k * self.stride[1]];
-                        let rhs_elem = rhs.data[rhs.offset + j * rhs.stride[1] + k * rhs.stride[0]];
+                        let self_elem = self_cpu_data[self.metadata.offset
+                            + i * self.metadata.stride[0]
+                            + k * self.metadata.stride[1]];
+                        let rhs_elem = rhs_cpu_data[rhs.metadata.offset
+                            + j * rhs.metadata.stride[1]
+                            + k * rhs.metadata.stride[0]];
                         self_elem * rhs_elem
                     })
                     .reduce(|acc, e| acc + e)
@@ -108,22 +123,23 @@ where
 
     fn batched_matmul(&self, rhs: &Self) -> Self {
         assert_eq!(
-            self.shape[self.shape.len() - 1],
-            rhs.shape()[rhs.shape.len()],
+            self.metadata.shape[self.metadata.shape.len() - 1],
+            rhs.shape()[rhs.metadata.shape.len()],
             "Columns of self and rows of rhs must match"
         );
 
         assert!(
-            self.shape.len() > 2 || rhs.shape.len() > 2,
+            self.rank() > 2 || rhs.rank() > 2,
             "One tensor must have more than 2 dimensions."
         );
 
         let mut brdcsted_self = self.clone();
         let mut brdcsted_rhs = rhs.clone();
-        if self.shape[self.shape.len() - 2..] != rhs.shape[rhs.shape.len() - 2..] {
+        if self.metadata.shape[self.rank() - 2..] != rhs.metadata.shape[rhs.rank() - 2..] {
             let mut new_shape: Vec<usize> = Vec::new();
 
             for dim in self
+                .metadata
                 .shape
                 .iter()
                 .rev()
@@ -144,19 +160,19 @@ where
             new_shape.truncate(new_shape.len() - 2);
 
             let mut new_shape_self = new_shape.clone();
-            new_shape_self.extend_from_slice(&self.shape()[self.shape.len() - 2..]);
+            new_shape_self.extend_from_slice(&self.shape()[self.rank() - 2..]);
             let mut new_shape_rhs = new_shape;
-            new_shape_rhs.extend_from_slice(&rhs.shape()[rhs.shape.len() - 2..]);
+            new_shape_rhs.extend_from_slice(&rhs.shape()[rhs.rank() - 2..]);
 
             brdcsted_self = self.broadcast_to(&new_shape_self);
             brdcsted_rhs = rhs.broadcast_to(&new_shape_rhs);
         }
 
         let mut new_shape = brdcsted_self.shape();
-        new_shape.truncate(brdcsted_self.shape.len() - 2);
+        new_shape.truncate(brdcsted_self.rank() - 2);
         let size: usize = new_shape.iter().product();
-        new_shape.push(brdcsted_self.shape[brdcsted_self.shape.len() - 1]);
-        new_shape.push(brdcsted_rhs.shape[brdcsted_rhs.shape.len()]);
+        new_shape.push(brdcsted_self.metadata.shape[brdcsted_self.rank() - 1]);
+        new_shape.push(brdcsted_rhs.metadata.shape[brdcsted_rhs.rank()]);
 
         let mut new_data: Vec<T> = Vec::new();
 
@@ -171,16 +187,24 @@ where
             let elem_self = brdcsted_self.index(offset_idx.clone());
             let elem_rhs = brdcsted_rhs.index(offset_idx);
 
-            new_data.extend_from_slice(elem_self.matmul_matricies(&elem_rhs).data.as_slice());
+            new_data.extend_from_slice(
+                elem_self
+                    .matmul_matricies(&elem_rhs)
+                    .data
+                    .read()
+                    .unwrap()
+                    .expect_cpu()
+                    .as_slice(),
+            );
         }
 
         Tensor::new_from_op(new_data, new_shape, Device::CPU)
     }
 
     pub fn cpu_matmul(&self, rhs: &Self) -> Self {
-        if self.shape.len() == 2 && rhs.shape.len() == 2 {
+        if self.rank() == 2 && rhs.rank() == 2 {
             return self.matmul_matricies(rhs);
-        } else if self.is_scalar() || rhs.is_scalar() {
+        } else if self.metadata.is_scalar() || rhs.metadata.is_scalar() {
             return self.cpu_elemwise_bin(rhs, T::mul);
         } else {
             return self.batched_matmul(rhs);
@@ -469,7 +493,7 @@ mod tests {
             let a = t(vec![3.0], vec![1]);
             let b = t(vec![4.0], vec![1]);
             let c = a.cpu_matmul(&b);
-            assert!(c.is_scalar());
+            assert!(c.metadata.is_scalar());
             assert_eq!(c.item().unwrap(), 12.0);
         }
 
