@@ -581,15 +581,15 @@ mod tests {
             #[test]
             fn batch_dim_no_broadcast() {
                 // a: [2, 1, 2], b: [2, 2, 1] — same batch dim, no broadcast
-                // Batch 0: [[1,2]] @ [[5],[7]] = [19]
-                // Batch 1: [[3,4]] @ [[6],[8]] = [50]
+                // Batch 0: [[1,2]] @ [[5],[6]] = 1*5 + 2*6 = 17
+                // Batch 1: [[3,4]] @ [[7],[8]] = 3*7 + 4*8 = 53
                 let a = t(vec![1.0, 2.0, 3.0, 4.0], vec![2, 1, 2]);
                 let b = t(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2, 1]);
                 let c = a.cpu_matmul(&b);
                 assert_eq!(c.shape(), vec![2, 1, 1]);
                 let v = collect(&c);
-                assert!((v[0] - 19.0).abs() < 1e-5, "batch 0: {} != 19", v[0]);
-                assert!((v[1] - 50.0).abs() < 1e-5, "batch 1: {} != 50", v[1]);
+                assert!((v[0] - 17.0).abs() < 1e-5, "batch 0: {} != 17", v[0]);
+                assert!((v[1] - 53.0).abs() < 1e-5, "batch 1: {} != 53", v[1]);
             }
 
             #[test]
