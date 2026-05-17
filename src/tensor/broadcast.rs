@@ -1,6 +1,5 @@
 use std::sync::{Arc, OnceLock};
 
-
 use crate::tensor::{Element, Tensor, TensorInner};
 
 impl<T> Tensor<T>

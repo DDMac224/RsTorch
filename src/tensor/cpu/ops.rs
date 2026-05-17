@@ -15,8 +15,6 @@ where
             (brdcsted_self, brdcsted_rhs) = self.broadcast_tensors(rhs);
         }
 
-        let size: usize = brdcsted_self.metadata.shape.iter().product();
-
         let mut data: Vec<T> = Vec::new();
 
         let self_data_locked = self.data.read().unwrap();
@@ -25,7 +23,7 @@ where
         let self_cpu_data = self_data_locked.expect_cpu();
         let rhs_cpu_data = rhs_data_locked.expect_cpu();
 
-        for i in 0..size {
+        for i in 0..brdcsted_self.size() {
             let idx = brdcsted_self.metadata.shape.iter().rev().scan(i, |acc, e| {
                 let temp = *acc;
                 *acc /= *e;
@@ -61,14 +59,11 @@ where
             }
         } else {
             for i in 0..size {
-                let idx = self.metadata.shape.iter().rev().scan(i, |acc, e| {
-                    let temp = *acc;
-                    *acc /= *e;
-                    Some(temp % e)
-                });
+                let idx = self.metadata.expand_idx(i);
                 let elem_self = self.metadata.offset
                     + idx
-                        .clone()
+                        .iter()
+                        .rev()
                         .zip(self.metadata.stride.iter().rev())
                         .fold(0, |acc, (idx, strd)| acc + (idx * strd));
 
@@ -124,7 +119,7 @@ where
     fn batched_matmul(&self, rhs: &Self) -> Self {
         assert_eq!(
             self.metadata.shape[self.metadata.shape.len() - 1],
-            rhs.shape()[rhs.metadata.shape.len()],
+            rhs.shape()[rhs.metadata.shape.len() - 2],
             "Columns of self and rows of rhs must match"
         );
 
@@ -135,15 +130,17 @@ where
 
         let mut brdcsted_self = self.clone();
         let mut brdcsted_rhs = rhs.clone();
-        if self.metadata.shape[self.rank() - 2..] != rhs.metadata.shape[rhs.rank() - 2..] {
+
+        let self_batch_shape = &self.shape()[..self.rank() - 2];
+        let rhs_batch_shape = &rhs.shape()[..rhs.rank() - 2];
+
+        if self_batch_shape != rhs_batch_shape {
             let mut new_shape: Vec<usize> = Vec::new();
 
-            for dim in self
-                .metadata
-                .shape
+            for dim in self_batch_shape
                 .iter()
                 .rev()
-                .zip_longest(rhs.shape().iter().rev())
+                .zip_longest(rhs_batch_shape.iter().rev())
             {
                 match dim {
                     itertools::EitherOrBoth::Both(self_dim, other_dim) => {
@@ -157,7 +154,7 @@ where
                     }
                 }
             }
-            new_shape.truncate(new_shape.len() - 2);
+            new_shape.reverse();
 
             let mut new_shape_self = new_shape.clone();
             new_shape_self.extend_from_slice(&self.shape()[self.rank() - 2..]);
@@ -170,20 +167,24 @@ where
 
         let mut new_shape = brdcsted_self.shape();
         new_shape.truncate(brdcsted_self.rank() - 2);
+        let truncated_shape = new_shape.clone();
         let size: usize = new_shape.iter().product();
-        new_shape.push(brdcsted_self.metadata.shape[brdcsted_self.rank() - 1]);
-        new_shape.push(brdcsted_rhs.metadata.shape[brdcsted_rhs.rank()]);
+        new_shape.push(brdcsted_self.metadata.shape[brdcsted_self.rank() - 2]);
+        new_shape.push(brdcsted_rhs.metadata.shape[brdcsted_rhs.rank() - 1]);
 
         let mut new_data: Vec<T> = Vec::new();
 
         for i in 0..size {
-            let offset_idx = repeat_n(0, 2)
-                .chain(new_shape.iter().rev().scan(i, |acc, e| {
+            let mut offset_idx = truncated_shape
+                .iter()
+                .rev()
+                .scan(i, |acc, e| {
                     let temp = *acc;
                     *acc /= e;
-                    Some(e % temp)
-                }))
+                    Some(temp % e)
+                })
                 .collect::<Vec<usize>>();
+            offset_idx.reverse();
             let elem_self = brdcsted_self.index(offset_idx.clone());
             let elem_rhs = brdcsted_rhs.index(offset_idx);
 
@@ -286,10 +287,12 @@ mod tests {
                 let a = t(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 1, 3]);
                 let b = t(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0], vec![1, 2, 3]);
                 let c = a.cpu_elemwise_bin(&b, |x, y| x + y);
-                assert_eq!(collect(&c), vec![
-                    11.0, 22.0, 33.0, 41.0, 52.0, 63.0,
-                    14.0, 25.0, 36.0, 44.0, 55.0, 66.0,
-                ]);
+                assert_eq!(
+                    collect(&c),
+                    vec![
+                        11.0, 22.0, 33.0, 41.0, 52.0, 63.0, 14.0, 25.0, 36.0, 44.0, 55.0, 66.0,
+                    ]
+                );
             }
         }
 
@@ -418,7 +421,10 @@ mod tests {
             let a = t(vec![1.0, 2.0, 3.0], vec![3, 1]);
             let b = t(vec![4.0, 5.0, 6.0], vec![1, 3]);
             let c = a.cpu_matmul(&b);
-            assert_eq!(collect(&c), vec![4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 12.0, 15.0, 18.0]);
+            assert_eq!(
+                collect(&c),
+                vec![4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 12.0, 15.0, 18.0]
+            );
         }
 
         #[test]
@@ -493,8 +499,6 @@ mod tests {
     // =========================================================================
     // cpu_matmul — batched path (batched_matmul)
     //
-    // NOTE: These tests document expected behavior. The implementation
-    // currently has bugs — see known issues at the top of each section.
     // =========================================================================
 
     mod matmul_batched {
@@ -503,21 +507,20 @@ mod tests {
         mod batched_3d {
             use super::*;
 
-            // Known bugs in batched_matmul:
-            //   1. Line 127: rhs.shape()[rhs.metadata.shape.len()] is OOB
-            //   2. Lines 174-175: output shape construction is incorrect
-            //   3. Lines 180-184: batch index iteration logic is broken
-
             #[test]
             fn two_batches_2x3_times_3x2() {
                 // Batch 0: [[1,2,3],[4,5,6]] @ [[7,8],[9,10],[11,12]] = [[58,64],[139,154]]
                 // Batch 1: [[7,8,9],[10,11,12]] @ [[13,14],[15,16],[17,18]] = [[364,388],[499,532]]
                 let a = t(
-                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                    vec![
+                        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+                    ],
                     vec![2, 2, 3],
                 );
                 let b = t(
-                    vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0],
+                    vec![
+                        7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
+                    ],
                     vec![2, 3, 2],
                 );
                 let c = a.cpu_matmul(&b);
@@ -540,7 +543,10 @@ mod tests {
                 );
                 let c = a.cpu_matmul(&b);
                 assert_eq!(c.shape(), vec![3, 2, 2]);
-                assert_eq!(collect(&c), vec![1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]);
+                assert_eq!(
+                    collect(&c),
+                    vec![1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]
+                );
             }
 
             #[test]
@@ -561,7 +567,9 @@ mod tests {
                 // Batch 0: [[1,2],[3,4],[5,6]] @ [[1],[2]] = [[5],[11],[17]]
                 // Batch 1: [[7,8],[9,10],[11,12]] @ [[1],[2]] = [[23],[29],[35]]
                 let a = t(
-                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                    vec![
+                        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+                    ],
                     vec![2, 3, 2],
                 );
                 let b = t(vec![1.0, 2.0], vec![1, 2, 1]);
@@ -588,7 +596,9 @@ mod tests {
             fn broadcast_identity_matrix() {
                 // a: [3, 2, 2], b: [1, 2, 2] → identity broadcasts to all 3 batches
                 let a = t(
-                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                    vec![
+                        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+                    ],
                     vec![3, 2, 2],
                 );
                 let b = t(vec![1.0, 0.0, 0.0, 1.0], vec![1, 2, 2]);
@@ -596,7 +606,9 @@ mod tests {
                 assert_eq!(c.shape(), vec![3, 2, 2]);
                 assert_eq!(
                     collect(&c),
-                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+                    vec![
+                        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0
+                    ]
                 );
             }
         }
