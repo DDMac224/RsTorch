@@ -49,7 +49,7 @@ impl<T> TensorData<T>
 where
     T: Element,
 {
-    pub fn expect_cpu(&self) -> &Vec<T> {
+    pub fn expect_cpu(&self) -> &[T] {
         match self {
             TensorData::CpuData(CpuData(vec)) => vec,
             _ => panic!("Data is not on Cpu"),

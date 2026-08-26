@@ -7,7 +7,7 @@ use std::{
     fmt::Debug,
     io,
     iter::repeat,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     sync::{Arc, OnceLock, RwLock},
 };
 
@@ -79,7 +79,7 @@ where
                 data,
                 device.unwrap_or(Device::CPU),
             ))),
-            grad_node: grad_node,
+            grad_node,
             requires_grad: requires_grad.unwrap_or(false),
             metadata: TensorMetadata::new(shape),
         }))
@@ -173,8 +173,8 @@ where
 
     pub fn device(&self) -> Device {
         match *self.data.read().unwrap() {
-            TensorData::CpuData(_) => return Device::CPU,
-            TensorData::CudaData => return Device::Cuda,
+            TensorData::CpuData(_) => Device::CPU,
+            TensorData::CudaData => Device::Cuda,
         }
     }
 

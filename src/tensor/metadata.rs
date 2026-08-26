@@ -95,7 +95,7 @@ impl TensorMetadata {
         TensorMetadata {
             stride: new_stride,
             shape: new_shape,
-            offset: self.offset.clone(),
+            offset: self.offset,
         }
     }
 
@@ -111,7 +111,7 @@ impl TensorMetadata {
         TensorMetadata {
             stride,
             shape,
-            offset: self.offset.clone(),
+            offset: self.offset,
         }
     }
 }

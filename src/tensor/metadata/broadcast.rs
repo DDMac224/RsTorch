@@ -5,9 +5,8 @@ use itertools::Itertools;
 use crate::tensor::metadata::TensorMetadata;
 
 impl TensorMetadata {
-    fn is_broadcastable(&self, target: &Vec<usize>) -> bool {
+    fn is_broadcastable(&self, target: &[usize]) -> bool {
         self.shape
-            .clone()
             .iter()
             .rev()
             .zip(target.iter().rev())
@@ -15,7 +14,7 @@ impl TensorMetadata {
             && self.shape.len() <= target.len()
     }
 
-    pub fn broadcast_to(&self, target: &Vec<usize>) -> Self {
+    pub fn broadcast_to(&self, target: &[usize]) -> Self {
         assert!(
             self.is_broadcastable(target),
             "Tensor of shape: {:?} cannot be broadcasted to shape: {:?}",
@@ -50,7 +49,7 @@ impl TensorMetadata {
 
         Self {
             stride: broadcasted_stride,
-            shape: target.clone(),
+            shape: target.to_vec(),
             offset: self.offset,
         }
     }

@@ -14,4 +14,4 @@ where
     fn backward(&self, grad_output: Tensor<T>);
 }
 
-dyn_clone::clone_trait_object!(<T> BackwardFn<T> where T:Element);
+dyn_clone::clone_trait_object!(<T> BackwardFn<T> where T: Element);

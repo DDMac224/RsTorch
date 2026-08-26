@@ -1,4 +1,4 @@
-use std::{cmp, iter::repeat_n};
+use std::cmp;
 
 use itertools::Itertools;
 
@@ -74,7 +74,7 @@ where
         Tensor::new_from_op(data, self.shape(), Device::CPU)
     }
 
-    fn matmul_matricies(&self, rhs: &Self) -> Self {
+    fn matmul_matrices(&self, rhs: &Self) -> Self {
         assert!(
             self.rank() == rhs.rank() && self.rank() == 2,
             "Matrix matmul can only have two dimensions"
@@ -185,17 +185,16 @@ where
                 })
                 .collect::<Vec<usize>>();
             offset_idx.reverse();
-            let elem_self = brdcsted_self.index(offset_idx.clone());
-            let elem_rhs = brdcsted_rhs.index(offset_idx);
+            let elem_self = brdcsted_self.index(&offset_idx);
+            let elem_rhs = brdcsted_rhs.index(&offset_idx);
 
             new_data.extend_from_slice(
                 elem_self
-                    .matmul_matricies(&elem_rhs)
+                    .matmul_matrices(&elem_rhs)
                     .data
                     .read()
                     .unwrap()
-                    .expect_cpu()
-                    .as_slice(),
+                    .expect_cpu(),
             );
         }
 
@@ -204,11 +203,11 @@ where
 
     pub fn cpu_matmul(&self, rhs: &Self) -> Self {
         if self.rank() == 2 && rhs.rank() == 2 {
-            return self.matmul_matricies(rhs);
+            self.matmul_matrices(rhs)
         } else if self.metadata.is_scalar() || rhs.metadata.is_scalar() {
-            return self.cpu_elemwise_bin(rhs, T::mul);
+            self.cpu_elemwise_bin(rhs, T::mul)
         } else {
-            return self.batched_matmul(rhs);
+            self.batched_matmul(rhs)
         }
     }
 }

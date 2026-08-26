@@ -67,10 +67,11 @@ where
             .get()
             .unwrap()
             .backward(grad_output.clone());
-        self.rhs.grad_node.get().unwrap().backward(
-            Tensor::zeros_like(&grad_output.clone(), Some(false))
-                .elemwise_sub(&grad_output.clone()),
-        );
+        self.rhs
+            .grad_node
+            .get()
+            .unwrap()
+            .backward(Tensor::zeros_like(&grad_output, Some(false)).elemwise_sub(&grad_output));
     }
 }
 

@@ -1,7 +1,8 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::tensor::{
-    Device, Element, Tensor, TensorInner, data::TensorData, metadata::TensorMetadata,
+use crate::{
+    autograd::node::GradNode,
+    tensor::{Device, Element, Tensor, TensorInner, data::TensorData, metadata::TensorMetadata},
 };
 
 impl<T> Tensor<T>
@@ -44,5 +45,17 @@ where
         } else {
             panic!("Tensor does not have grad_node")
         }
+    }
+
+    pub fn detach(&self) -> Tensor<T> {
+        let grad_node = OnceLock::new();
+        let _ = grad_node.set(GradNode::leaf());
+
+        Self(Arc::new(TensorInner {
+            data: Arc::clone(&self.data),
+            metadata: self.metadata.clone(),
+            grad_node,
+            requires_grad: self.requires_grad(),
+        }))
     }
 }

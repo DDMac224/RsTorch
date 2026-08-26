@@ -36,7 +36,7 @@ impl<T: Element> GradNode<T> {
     }
 
     pub fn set_grad(&self, grad: Tensor<T>) {
-        *self.grad.lock().unwrap() = Some(grad.clone());
+        *self.grad.lock().unwrap() = Some(grad);
     }
 
     pub fn update_grad(&self, grad: Tensor<T>) {
@@ -45,7 +45,7 @@ impl<T: Element> GradNode<T> {
         if let Some(ref mut mut_t) = *grad_mut {
             *mut_t = mut_t.elemwise_add(&grad);
         } else {
-            *grad_mut = Some(grad.clone());
+            *grad_mut = Some(grad);
         }
     }
 

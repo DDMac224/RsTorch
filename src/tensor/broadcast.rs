@@ -6,7 +6,7 @@ impl<T> Tensor<T>
 where
     T: Element,
 {
-    pub fn broadcast_to(&self, target: &Vec<usize>) -> Self {
+    pub fn broadcast_to(&self, target: &[usize]) -> Self {
         Self(Arc::new(TensorInner {
             data: self.data.clone(),
             metadata: self.metadata.broadcast_to(target),
@@ -29,7 +29,7 @@ where
                 data: other.data.clone(),
                 metadata: new_metadata.1,
                 grad_node: OnceLock::new(),
-                requires_grad: self.requires_grad,
+                requires_grad: other.requires_grad,
             })),
         )
     }
